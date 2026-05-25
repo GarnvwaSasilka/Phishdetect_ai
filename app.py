@@ -1,7 +1,3 @@
-
-PhishDetect AI - Cybersecurity Email Analyzer
-Streamlit dashboard with dark theme, analytics, and history.
-
 import streamlit as st
 import pandas as pd
 import numpy as np

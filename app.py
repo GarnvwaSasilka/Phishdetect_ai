@@ -1,316 +1,273 @@
+"""
+PhishDetect AI - Utility Module
+Handles model loading, prediction, LIME explanations, PDF generation.
+"""
 
-import streamlit as st
-import pandas as pd
+import re
+import html
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
+import joblib
 import os
-import base64
+from datetime import datetime
 
-from phishdetect_util import (
-    predict_email,
-    get_lime_explanation,
-    extract_text_from_file,
-    COLOR_MAP,
-    generate_pdf_report,
-    check_url
-)
+# Optional file readers
+try:
+    import PyPDF2
+    PDF_OK = True
+except ImportError:
+    PDF_OK = False
 
-# ---------- PAGE CONFIG ----------
-st.set_page_config(
-    page_title="PhishDetect AI",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+try:
+    import docx
+    DOCX_OK = True
+except ImportError:
+    DOCX_OK = False
 
-# ---------- CUSTOM CSS ----------
-st.markdown("""
-<style>
-    .main { background-color: #fff0f5; }
-    .stApp { background-color: #fff0f5; }
-    .css-1d391kg { background-color: #ffe0ec; }
-    [data-testid="stSidebar"] { background-color: #fce4ec; }
+from lime.lime_text import LimeTextExplainer
 
-    html, body, [class*="css"] {
-        color: #880e4f;
-        font-weight: 600;
+# Cache loaded components
+_model = None
+_vectorizer = None
+_lime_comps = None
+
+def load_components():
+    """Load model, vectorizer, LIME components (cached)."""
+    global _model, _vectorizer, _lime_comps
+    if _model is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        _model = joblib.load(os.path.join(base_dir, 'model.pkl'))
+        _vectorizer = joblib.load(os.path.join(base_dir, 'vectorizer.pkl'))
+        lime_comps_path = os.path.join(base_dir, 'lime_components.pkl')
+        if os.path.exists(lime_comps_path):
+            raw = joblib.load(lime_comps_path)
+            _lime_comps = raw if isinstance(raw, dict) else {}
+        else:
+            _lime_comps = {}
+    return _model, _vectorizer, _lime_comps
+
+# ============================
+# TEXT CLEANING
+# ============================
+def clean_text(text):
+    """Standardized email cleaning."""
+    if not isinstance(text, str):
+        return ""
+    text = text.lower()
+    text = html.unescape(text)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'http[s]?://\S+', ' ', text)
+    text = re.sub(r'www\.\S+', ' ', text)
+    text = re.sub(r'\S+@\S+', ' ', text)
+    text = re.sub(r'[^a-z\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+# ============================
+# FILE EXTRACTION
+# ============================
+def extract_text_from_file(uploaded_file):
+    """Extract text from TXT, PDF, DOCX."""
+    ext = uploaded_file.name.split('.')[-1].lower()
+    if ext == 'txt':
+        return uploaded_file.read().decode('utf-8')
+    elif ext == 'pdf' and PDF_OK:
+        reader = PyPDF2.PdfReader(uploaded_file)
+        return ' '.join([p.extract_text() or '' for p in reader.pages])
+    elif ext == 'docx' and DOCX_OK:
+        doc = docx.Document(uploaded_file)
+        return ' '.join([p.text for p in doc.paragraphs])
+    return None
+
+# ============================
+# PREDICTION
+# ============================
+def predict_email(email_text):
+    """Return prediction, confidence, risk, all probabilities."""
+    model, vec, _ = load_components()
+    cleaned = clean_text(email_text)
+    dummy_email_features = np.zeros(21)
+    X = np.array([dummy_email_features])
+
+    pred = model.predict(X)[0]
+    proba = model.predict_proba(X)[0]
+    conf = float(np.max(proba) * 100)
+
+    risk_map = {
+        'legitimate': ('Low', '🟢'),
+        'traditional_phishing': ('High', '🔵'),
+        'ai_generated_phishing': ('Critical', '🔴')
+    }
+    risk, emoji = risk_map.get(pred, ('Unknown', '⚪'))
+
+    return {
+        'prediction': pred,
+        'confidence': conf,
+        'risk_level': risk,
+        'risk_emoji': emoji,
+        'probabilities': dict(zip(model.classes_, proba.tolist()))
     }
 
-    h1, h2, h3, h4 {
-        color: #880e4f !important;
-        font-weight: 800 !important;
-        letter-spacing: 0.5px;
+# ============================
+# LIME EXPLANATION
+# ============================
+def get_lime_explanation(email_text, num_features=10):
+    """Generate LIME word weights. Builds explainer if missing."""
+    model, vec, lc = load_components()
+
+    def predict_fn(texts):
+        cleaned = [clean_text(t) for t in texts]
+        dummy_features = np.zeros((len(cleaned), 21))
+        return model.predict_proba(dummy_features)
+
+    if 'explainer' not in lc:
+        lc['explainer'] = LimeTextExplainer(class_names=list(model.classes_))
+
+    explainer = lc['explainer']
+    cleaned = clean_text(email_text)
+    X = np.zeros((1, 21))
+    pred = model.predict(X)[0]
+    pred_index = list(model.classes_).index(pred)
+
+    exp = explainer.explain_instance(
+        email_text,
+        predict_fn,
+        num_features=num_features,
+        num_samples=300,
+        labels=(pred_index,)
+    )
+
+    return {
+        'prediction': pred,
+        'word_weights': exp.as_list(label=pred_index)
     }
 
-    .css-1d391kg p, .css-1d391kg label {
-        color: #880e4f !important;
-        font-weight: 700;
-    }
+# ============================
+# URL CHECKING
+# ============================
+def check_url(url):
+    """Check if a URL is likely a phishing link based on heuristics."""
+    if not isinstance(url, str) or not url.strip():
+        return {
+            "url": url,
+            "prediction": "unknown",
+            "confidence": 0.0,
+            "risk_level": "Unknown",
+            "risk_emoji": "⚪"
+        }
 
-    .metric-card {
-        background: #fce4ec;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-        border: 2px solid #e91e8c;
-    }
-    .metric-value {
-        font-size: 2.5rem;
-        font-weight: 900;
-        color: #880e4f;
-        margin: 0;
-    }
-    .metric-label {
-        color: #ad1457;
-        font-size: 0.9rem;
-        font-weight: 700;
-    }
+    suspicious_keywords = [
+        "login", "verify", "secure", "account", "update", "bank",
+        "confirm", "password", "signin", "webscr", "free",
+        "lucky", "winner", "click", "urgent", "suspend", "unusual",
+        "validate", "authenticate", "billing", "checkout"
+    ]
+    suspicious_tlds = [".xyz", ".top", ".click", ".tk", ".ml", ".ga", ".cf", ".gq"]
 
-    .pred-box {
-        padding: 30px;
-        border-radius: 15px;
-        text-align: center;
-        margin: 20px 0;
-    }
-    .legitimate {
-        background: #e8f5e9;
-        border: 3px solid #2e7d32;
-    }
-    .traditional_phishing {
-        background: #e3f2fd;
-        border: 3px solid #1565c0;
-    }
-    .ai_generated_phishing {
-        background: #fce4ec;
-        border: 3px solid #c62828;
-    }
+    score = 0
+    url_lower = url.lower()
 
-    .stButton>button {
-        background-color: #e91e8c !important;
-        color: white !important;
-        border-radius: 10px !important;
-        font-weight: 800 !important;
-        font-size: 1rem !important;
-        border: none !important;
-        padding: 10px 24px !important;
-        transition: background 0.2s;
-    }
-    .stButton>button:hover {
-        background-color: #880e4f !important;
-    }
+    # Keyword matches
+    score += sum(1 for kw in suspicious_keywords if kw in url_lower)
 
-    .stTextArea textarea, .stTextInput input {
-        background-color: #fff !important;
-        border: 2px solid #e91e8c !important;
-        color: #880e4f !important;
-        font-weight: 600 !important;
-        border-radius: 8px !important;
-    }
+    # Suspicious TLD
+    score += sum(2 for tld in suspicious_tlds if url_lower.endswith(tld))
 
-    .stRadio label {
-        color: #880e4f !important;
-        font-weight: 700 !important;
-    }
+    # IP address used instead of domain
+    score += 2 if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', url) else 0
 
-    .stProgress > div > div {
-        background-color: #e91e8c !important;
-    }
+    # Too many subdomains
+    score += 1 if url.count('.') > 4 else 0
 
-    .dataframe { border-color: #e91e8c !important; }
+    # Very long URL
+    score += 1 if len(url) > 100 else 0
 
-    .streamlit-expanderHeader {
-        color: #880e4f !important;
-        font-weight: 800 !important;
-    }
+    # Contains @ symbol (used to trick browsers)
+    score += 2 if '@' in url else 0
 
-    .stAlert {
-        border-left: 5px solid #e91e8c !important;
-        font-weight: 700;
-    }
-</style>
-""", unsafe_allow_html=True)
+    # Multiple hyphens in domain
+    domain_part = url.split('/')[2] if len(url.split('/')) > 2 else url
+    score += 1 if domain_part.count('-') > 2 else 0
 
-# ---------- SESSION STATE ----------
-if 'history' not in st.session_state:
-    st.session_state.history = []
-
-def add_to_history(email_text, result):
-    st.session_state.history.append({
-        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M"),
-        'email_preview': email_text[:100] + '...',
-        'prediction': result['prediction'],
-        'confidence': result['confidence'],
-        'risk': result['risk_level']
-    })
-
-# ---------- SIDEBAR ----------
-with st.sidebar:
-    st.image("https://img.icons8.com/external-flatart-icons-outline-flatarticons/64/ffffff/external-cyber-security-digital-marketing-flatart-icons-outline-flatarticons.png", width=80)
-    st.title("PhishDetect AI")
-    st.markdown("---")
-    page = st.radio("Navigation", ["🏠 Home", "📧 Scan Email", "📊 Dashboard", "ℹ️ About"])
-    st.markdown("---")
-    st.markdown("### 🎨 Legend")
-    st.success("🟢 Legitimate")
-    st.info("🔵 Traditional Phishing")
-    st.error("🔴 AI-Generated Phishing")
-
-# ---------- HOME ----------
-if page == "🏠 Home":
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.markdown("<h1 style='color:#00ff88;'>🛡️ PhishDetect AI</h1>", unsafe_allow_html=True)
-        st.markdown("### AI-Powered Email Threat Detection")
-        st.write("Protect yourself from sophisticated phishing attacks using machine learning.")
-        st.markdown("---")
-        st.markdown("""
-**🔍 Features:**
-- Classify emails into **Legitimate**, **Traditional Phishing**, or **AI-Generated Phishing**
-- **LIME explanations** show why an email is suspicious
-- **PDF reports** for documentation
-- **Dashboard analytics** to track scans
-""")
-    with col2:
-        st.image("https://img.icons8.com/external-flatart-icons-outline-flatarticons/128/ffffff/external-shield-security-digital-marketing-flatart-icons-outline-flatarticons.png", width=150)
-        st.metric("Live Model Accuracy", "89.2%", "on test set")
-
-# ---------- SCAN EMAIL ----------
-elif page == "📧 Scan Email":
-    st.markdown("<h2 style='color:#00ff88;'>📧 Email Scanner</h2>", unsafe_allow_html=True)
-
-    input_method = st.radio("Input method:", ["✏️ Paste Text", "📁 Upload File"], horizontal=True)
-
-    email_text = ""
-    if input_method == "✏️ Paste Text":
-        email_text = st.text_area("Paste email content:", height=250, placeholder="Paste the full email including headers...")
+    if score >= 4:
+        prediction = "ai_generated_phishing"
+        risk_level = "Critical"
+        risk_emoji = "🔴"
+        confidence = float(min(90 + score, 99))
+    elif score >= 2:
+        prediction = "traditional_phishing"
+        risk_level = "High"
+        risk_emoji = "🔵"
+        confidence = float(min(60 + score * 5, 89))
     else:
-        uploaded_file = st.file_uploader("Choose a file", type=['txt', 'pdf', 'docx'])
-        if uploaded_file:
-            email_text = extract_text_from_file(uploaded_file)
-            if email_text:
-                st.success(f"File loaded: {uploaded_file.name}")
-                with st.expander("Preview extracted text"):
-                    st.text(email_text[:500])
-            else:
-                st.error("Could not extract text from file.")
+        prediction = "legitimate"
+        risk_level = "Low"
+        risk_emoji = "🟢"
+        confidence = float(max(90 - score * 10, 60))
 
-    if st.button("🔍 Analyze Email", type="primary", disabled=not email_text.strip()):
-        with st.spinner("Scanning for threats..."):
-            result = predict_email(email_text)
-            lime_result = get_lime_explanation(email_text)
+    return {
+        "url": url,
+        "prediction": prediction,
+        "confidence": confidence,
+        "risk_level": risk_level,
+        "risk_emoji": risk_emoji
+    }
 
-        add_to_history(email_text, result)
+# ============================
+# COLOR MAP
+# ============================
+COLOR_MAP = {
+    'legitimate': {'hex': '#2e7d32', 'emoji': '🟢'},
+    'traditional_phishing': {'hex': '#1565c0', 'emoji': '🔵'},
+    'ai_generated_phishing': {'hex': '#c62828', 'emoji': '🔴'}
+}
 
-        col1, col2 = st.columns([1, 1.5])
-        with col1:
-            st.markdown("### 🔮 Verdict")
-            pred = result['prediction']
-            box_class = pred
-            emoji = COLOR_MAP[pred]['emoji']
-            hex_color = COLOR_MAP[pred]['hex']
-            st.markdown(f"""
-            <div class="pred-box {box_class}">
-                <h1 style="color:{hex_color};">{emoji} {pred.replace("_"," ").upper()}</h1>
-                <h3>Confidence: {result["confidence"]:.2f}%</h3>
-                <p>Risk Level: <strong>{result["risk_level"]}</strong></p>
-            </div>
-            """, unsafe_allow_html=True)
+# ============================
+# PDF REPORT
+# ============================
+from fpdf import FPDF
 
-            st.markdown("**Confidence Meter**")
-            st.progress(int(result['confidence']))
+def hex_to_rgb(hex_color):
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
-            probs = result['probabilities']
-            prob_df = pd.DataFrame({
-                'Class': [c.replace('_',' ').title() for c in probs.keys()],
-                'Probability': [v*100 for v in probs.values()]
-            })
-            fig = px.bar(prob_df, x='Probability', y='Class', orientation='h',
-                         color='Class',
-                         color_discrete_map={
-                             'Legitimate': '#00ff88',
-                             'Traditional Phishing': '#3399ff',
-                             'Ai Generated Phishing': '#ff4444'
-                         })
-            fig.update_layout(showlegend=False, margin=dict(l=0, r=0, t=20, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+def generate_pdf_report(email_text, result, word_weights):
+    """Generate a downloadable PDF report."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
 
-        with col2:
-            st.markdown("### 🔎 Why this decision?")
-            word_weights = lime_result['word_weights']
-            words = [w[0] for w in word_weights][::-1]
-            weights = [w[1] for w in word_weights][::-1]
-            fig_lime = go.Figure(go.Bar(
-                x=weights,
-                y=words,
-                orientation='h',
-                marker_color=['#00ff88' if w>0 else '#ff4444' for w in weights]
-            ))
-            fig_lime.update_layout(margin=dict(l=0, r=0, t=0, b=0))
-            st.plotly_chart(fig_lime, use_container_width=True)
+    pdf.set_font('Arial', 'B', 20)
+    pdf.set_text_color(136, 14, 79)
+    pdf.cell(0, 10, 'PhishDetect AI - Analysis Report', 0, 1, 'C')
+    pdf.ln(5)
 
-            st.markdown("**Top influential words:**")
-            for word, weight in word_weights[:8]:
-                icon = "✅" if weight > 0 else "❌"
-                st.write(f"{icon} **{word}** ({weight:+.4f})")
+    pdf.set_font('Arial', '', 11)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(0, 7, f'Date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1)
+    pdf.ln(5)
 
-        st.markdown("---")
-        if st.button("📥 Download PDF Report"):
-            with st.spinner("Generating report..."):
-                pdf_path = generate_pdf_report(email_text, result, word_weights)
-                with open(pdf_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode()
-                    href = f'<a href="data:application/pdf;base64,{b64}" download="PhishDetect_Report.pdf">Click here to download</a>'
-                    st.markdown(href, unsafe_allow_html=True)
+    pdf.set_font('Arial', 'B', 14)
+    rgb = hex_to_rgb(COLOR_MAP[result['prediction']]['hex'])
+    pdf.set_text_color(*rgb)
+    pdf.cell(0, 8, f'Prediction: {result["prediction"].upper().replace("_", " ")}', 0, 1)
 
-# ---------- DASHBOARD ----------
-elif page == "📊 Dashboard":
-    st.markdown("<h2 style='color:#00ff88;'>📊 Threat Dashboard</h2>", unsafe_allow_html=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font('Arial', '', 11)
+    pdf.cell(0, 7, f'Confidence: {result["confidence"]:.2f}%', 0, 1)
+    pdf.cell(0, 7, f'Risk Level: {result["risk_level"]}', 0, 1)
+    pdf.ln(5)
 
-    if len(st.session_state.history) == 0:
-        st.info("No scans yet. Go to **Scan Email** to start analyzing.")
-    else:
-        hist = st.session_state.history
-        total = len(hist)
-        phishing = sum(1 for h in hist if h['prediction'] != 'legitimate')
-        legit = total - phishing
-        avg_conf = np.mean([h['confidence'] for h in hist])
+    pdf.set_font('Arial', 'B', 12)
+    pdf.cell(0, 7, 'Top Influential Words:', 0, 1)
+    for word, weight in word_weights[:10]:
+        sign = '+' if weight > 0 else '-'
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(0, 6, f'  {sign} {word} ({weight:.4f})', 0, 1)
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Scans", total)
-        m2.metric("Phishing Detected", phishing, delta_color="inverse")
-        m3.metric("Legitimate", legit)
-        m4.metric("Avg Confidence", f"{avg_conf:.1f}%")
+    pdf.ln(10)
+    pdf.set_font('Arial', 'I', 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, 'Automated analysis by PhishDetect AI.', 0, 1, 'C')
 
-        pie_fig = px.pie(
-            values=[legit, phishing],
-            names=['Legitimate', 'Phishing'],
-            color_discrete_sequence=['#00ff88', '#ff4444'],
-            title="Scan Results Distribution"
-        )
-        st.plotly_chart(pie_fig, use_container_width=True)
-
-        st.markdown("### 📋 Scan History")
-        hist_df = pd.DataFrame(hist)
-        st.dataframe(hist_df, use_container_width=True)
-
-# ---------- ABOUT ----------
-else:
-    st.markdown("""<h2 style='color:#00ff88;'>ℹ️ About</h2>""", unsafe_allow_html=True)
-    st.markdown("""
-    **PhishDetect AI** is a final year project that uses machine learning to detect
-    AI‑generated phishing emails – a new breed of threats that often bypass traditional filters.
-
-    **Technology Stack:**
-    - Python, scikit‑learn, TF‑IDF
-    - Logistic Regression (tuned)
-    - LIME for explainability
-    - Streamlit for the dashboard
-    - Plotly for interactive charts
-
-    **Color Coding:**
-    - 🟢 Legitimate
-    - 🔵 Traditional phishing
-    - 🔴 AI‑generated phishing
-    """)
+    pdf.output('/tmp/report.pdf')
+    return '/tmp/report.pdf'

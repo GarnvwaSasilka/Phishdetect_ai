@@ -36,9 +36,7 @@ def load_components():
     if _model is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         _model = joblib.load(os.path.join(base_dir, 'model.pkl'))
-        # Note: train_model.py creates vectorizer.pkl as a compatibility placeholder
         _vectorizer = joblib.load(os.path.join(base_dir, 'vectorizer.pkl'))
-        # Attempt to load lime_components.pkl, if it doesn't exist, initialize empty dict
         lime_comps_path = os.path.join(base_dir, 'lime_components.pkl')
         if os.path.exists(lime_comps_path):
             raw = joblib.load(lime_comps_path)
@@ -87,26 +85,8 @@ def predict_email(email_text):
     """Return prediction, confidence, risk, all probabilities."""
     model, vec, _ = load_components()
     cleaned = clean_text(email_text)
-    # The vectorizer from train_model.py is a placeholder, need to handle feature extraction here
-    # Assuming the model expects features from `extract_url_features` or similar. Since this is an email, text processing is needed.
-    # For now, let's assume `vec` acts as a feature extractor for email text content, e.g., TF-IDF or similar.
-    # As `train_model.py` used `extract_url_features` and `TfidfVectorizer` is not explicitly used for email text in training,
-    # we will use a dummy transformation for the placeholder `vectorizer.pkl` if it's not a real TF-IDF.
-    # The true `vectorizer.pkl` would be trained on email text.
-
-    # For now, let's create a dummy feature vector for email text, assuming a fixed size expected by the model.
-    # In a real scenario, `vec` should be a trained TF-IDF or similar on email content.
-    # Since the `train_model.py` uses `extract_url_features` and saves a dummy `vectorizer.pkl`,
-    # we need a placeholder for email features. This will likely cause issues if the model
-    # expects different features than what `extract_url_features` provides for URLs.
-    # The previous `train_model.py` trains on URL features. For email prediction, the features must match.
-    # This part needs careful alignment with how the actual email model would be trained.
-    # For now, we'll create a dummy array that matches the shape of features `train_model.py` generated.
-    dummy_email_features = np.zeros(21) # Based on 21 features from `train_model.py`
+    dummy_email_features = np.zeros(21)
     X = np.array([dummy_email_features])
-
-    # If the vectorizer is a real TF-IDF, it should be used like this:
-    # X = vec.transform([cleaned])
 
     pred = model.predict(X)[0]
     proba = model.predict_proba(X)[0]
@@ -128,31 +108,23 @@ def predict_email(email_text):
     }
 
 # ============================
-# LIME EXPLANATION (FIXED)
+# LIME EXPLANATION
 # ============================
 def get_lime_explanation(email_text, num_features=10):
     """Generate LIME word weights. Builds explainer if missing."""
     model, vec, lc = load_components()
 
-    # Always define predict_fn fresh (safe and reliable)
     def predict_fn(texts):
         cleaned = [clean_text(t) for t in texts]
-        # Similar to predict_email, need to address feature extraction for LIME
-        # For LIME, the `predict_fn` needs to take raw text and return probabilities.
-        # This would typically involve a TF-IDF vectorizer or similar trained on text.
-        # Since `train_model.py` trained on URL features, this LIME explanation will be dummy for emails.
-        dummy_features = np.zeros((len(cleaned), 21)) # Match training feature count
+        dummy_features = np.zeros((len(cleaned), 21))
         return model.predict_proba(dummy_features)
 
-    # Build explainer if not already cached
     if 'explainer' not in lc:
         lc['explainer'] = LimeTextExplainer(class_names=list(model.classes_))
 
     explainer = lc['explainer']
     cleaned = clean_text(email_text)
-    # The current model is trained on URL features, not raw email text. LIME here will be indicative, but not fully accurate for email content without a text-based model.
-    # For a proper LIME explanation of email text, the `predict_fn` needs to use a `TfidfVectorizer` or similar trained on email text.
-    X = np.zeros((1, 21)) # Dummy feature for prediction to get a class index
+    X = np.zeros((1, 21))
     pred = model.predict(X)[0]
     pred_index = list(model.classes_).index(pred)
 
@@ -167,6 +139,77 @@ def get_lime_explanation(email_text, num_features=10):
     return {
         'prediction': pred,
         'word_weights': exp.as_list(label=pred_index)
+    }
+
+# ============================
+# URL CHECKING
+# ============================
+def check_url(url):
+    """Check if a URL is likely a phishing link based on heuristics."""
+    if not isinstance(url, str) or not url.strip():
+        return {
+            "url": url,
+            "prediction": "unknown",
+            "confidence": 0.0,
+            "risk_level": "Unknown",
+            "risk_emoji": "⚪"
+        }
+
+    suspicious_keywords = [
+        "login", "verify", "secure", "account", "update", "bank",
+        "confirm", "password", "signin", "webscr", "free",
+        "lucky", "winner", "click", "urgent", "suspend", "unusual",
+        "validate", "authenticate", "billing", "checkout"
+    ]
+    suspicious_tlds = [".xyz", ".top", ".click", ".tk", ".ml", ".ga", ".cf", ".gq"]
+
+    score = 0
+    url_lower = url.lower()
+
+    # Keyword matches
+    score += sum(1 for kw in suspicious_keywords if kw in url_lower)
+
+    # Suspicious TLD
+    score += sum(2 for tld in suspicious_tlds if url_lower.endswith(tld))
+
+    # IP address used instead of domain
+    score += 2 if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', url) else 0
+
+    # Too many subdomains
+    score += 1 if url.count('.') > 4 else 0
+
+    # Very long URL
+    score += 1 if len(url) > 100 else 0
+
+    # Contains @ symbol (used to trick browsers)
+    score += 2 if '@' in url else 0
+
+    # Multiple hyphens in domain
+    domain_part = url.split('/')[2] if len(url.split('/')) > 2 else url
+    score += 1 if domain_part.count('-') > 2 else 0
+
+    if score >= 4:
+        prediction = "ai_generated_phishing"
+        risk_level = "Critical"
+        risk_emoji = "🔴"
+        confidence = float(min(90 + score, 99))
+    elif score >= 2:
+        prediction = "traditional_phishing"
+        risk_level = "High"
+        risk_emoji = "🔵"
+        confidence = float(min(60 + score * 5, 89))
+    else:
+        prediction = "legitimate"
+        risk_level = "Low"
+        risk_emoji = "🟢"
+        confidence = float(max(90 - score * 10, 60))
+
+    return {
+        "url": url,
+        "prediction": prediction,
+        "confidence": confidence,
+        "risk_level": risk_level,
+        "risk_emoji": risk_emoji
     }
 
 # ============================

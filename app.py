@@ -1,9 +1,9 @@
+
 import streamlit as st
 from phishdetect_util import check_url
 
 st.set_page_config(page_title="PhishDetect Dashboard", layout="wide")
 
-# Your CSS (avoid /* ... */ comments, use clean styles)
 st.markdown("""
 <style>
 .main-header {
@@ -13,7 +13,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Image handling – use a relative path that exists in the zip
-
+st.title("PhishDetect Dashboard")
 
 # Rest of your app...

@@ -271,13 +271,27 @@ if "page" not in st.session_state:
     st.session_state.page = "home"
 
 def add_to_history(email_text, result):
+    # Convert numeric prediction to string for display in history
+    pred_num = result["prediction"]
+    pred_str = _map_prediction_to_label(pred_num)
     st.session_state.history.append({
         "timestamp":     datetime.now().strftime("%Y-%m-%d %H:%M"),
         "email_preview": email_text[:80] + "...",
-        "prediction":    result["prediction"],
+        "prediction":    pred_str,
         "confidence":    result["confidence"],
         "risk":          result["risk_level"],
     })
+
+def _map_prediction_to_label(pred_num):
+    """Convert numeric model output (0,1,2) to string label."""
+    if pred_num == 0:
+        return "legitimate"
+    elif pred_num == 1:
+        return "traditional phishing"
+    elif pred_num == 2:
+        return "ai generated phishing"
+    else:
+        return "unknown"
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -416,8 +430,11 @@ elif page == "scan":
 
             add_to_history(email_text, result)
 
-            pred = result["prediction"]
-            ll   = pred.lower()
+            # --- FIX: Convert numeric prediction to label string ---
+            pred_num = result["prediction"]
+            pred_label = _map_prediction_to_label(pred_num)
+            ll = pred_label.lower()   # now a string, safe to call .lower()
+
             if "legit" in ll:
                 vclass, icon, bar_color = "verdict-legit", "✅", "#34D399"
             elif "ai" in ll or "generated" in ll:
@@ -425,7 +442,7 @@ elif page == "scan":
             else:
                 vclass, icon, bar_color = "verdict-phish", "🚨", "#FCA5A5"
 
-            label_clean = pred.replace("_", " ").title()
+            label_clean = pred_label.title()   # e.g., "Traditional Phishing"
             risk        = result.get("risk_level", "—")
             risk_cls    = "risk-high" if "high" in risk.lower() else ("risk-medium" if "med" in risk.lower() else "risk-low")
             conf        = result["confidence"]
@@ -445,317 +462,4 @@ elif page == "scan":
                 <div class="conf-fill" style="width:{conf_pct}%;background:{bar_color}"></div>
               </div>
             </div>
-            """, unsafe_allow_html=True)
-
-            # Probability chart
-            probs   = result.get("probabilities", {})
-            prob_df = pd.DataFrame({
-                "Class":       [c.replace("_", " ").title() for c in probs.keys()],
-                "Probability": [round(v * 100, 1) for v in probs.values()],
-            })
-            fig_prob = px.bar(
-                prob_df, x="Probability", y="Class", orientation="h",
-                color="Class",
-                color_discrete_map={
-                    "Legitimate":              "#34D399",
-                    "Traditional Phishing":    "#60A5FA",
-                    "Ai Generated Phishing":   "#FCD34D",
-                },
-            )
-            fig_prob.update_layout(
-                showlegend=False,
-                margin=dict(l=0, r=0, t=8, b=0),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", size=11),
-                xaxis=dict(gridcolor="#1E293B", zerolinecolor="#334155"),
-                yaxis=dict(gridcolor="rgba(0,0,0,0)"),
-                height=140,
-            )
-            st.plotly_chart(fig_prob, use_container_width=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            # LIME section
-            st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-            st.markdown('<div class="pd-card-title">🔬 Why this verdict? (LIME)</div>', unsafe_allow_html=True)
-
-            word_weights = lime_result.get("word_weights", [])
-
-            if word_weights:
-                words   = [w[0] for w in word_weights][::-1]
-                weights = [w[1] for w in word_weights][::-1]
-                fig_lime = go.Figure(go.Bar(
-                    x=weights, y=words, orientation="h",
-                    marker_color=["#34D399" if w > 0 else "#FCA5A5" for w in weights],
-                    marker_line_width=0,
-                ))
-                fig_lime.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#94A3B8", size=11),
-                    xaxis=dict(gridcolor="#334155", zerolinecolor="#475569"),
-                    yaxis=dict(gridcolor="rgba(0,0,0,0)"),
-                    height=220,
-                )
-                st.plotly_chart(fig_lime, use_container_width=True)
-
-                pills = "".join(
-                    f'<span class="lime-pill {"lime-pos" if w>0 else "lime-neg"}">{word}</span>'
-                    for word, w in word_weights[:14]
-                )
-                st.markdown(f'<div class="lime-wrap">{pills}</div>', unsafe_allow_html=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            # PDF download — fixed for Android & mobile
-            st.markdown('<div style="margin-top:4px">', unsafe_allow_html=True)
-            try:
-                from reportlab.lib.pagesizes import A4
-                from reportlab.lib.styles import ParagraphStyle
-                from reportlab.lib.units import mm
-                from reportlab.lib import colors
-                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-                from reportlab.lib.enums import TA_LEFT, TA_CENTER
-
-                buf = BytesIO()
-                doc = SimpleDocTemplate(buf, pagesize=A4,
-                                        leftMargin=20*mm, rightMargin=20*mm,
-                                        topMargin=20*mm, bottomMargin=20*mm)
-
-                C_BG   = colors.HexColor("#0F172A")
-                C_CARD = colors.HexColor("#1E293B")
-                C_TEXT = colors.HexColor("#E2E8F0")
-                C_MUTE = colors.HexColor("#94A3B8")
-                C_BLUE = colors.HexColor("#3B82F6")
-                C_BORD = colors.HexColor("#334155")
-                C_RES  = colors.HexColor(bar_color)
-
-                t_title  = ParagraphStyle("tt", fontSize=20, textColor=C_TEXT, fontName="Helvetica-Bold", spaceAfter=4)
-                t_sub    = ParagraphStyle("ts", fontSize=10, textColor=C_MUTE, fontName="Helvetica", spaceAfter=14)
-                t_label  = ParagraphStyle("tl", fontSize=8,  textColor=C_MUTE, fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=2, leading=12)
-                t_body   = ParagraphStyle("tb", fontSize=10, textColor=C_TEXT, fontName="Helvetica", leading=14)
-                t_footer = ParagraphStyle("tf", fontSize=8,  textColor=C_MUTE, fontName="Helvetica", alignment=TA_CENTER)
-
-                story = []
-                story.append(Paragraph("🛡️ PhishDetect AI", t_title))
-                story.append(Paragraph("Email Threat Analysis Report", t_sub))
-                story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORD))
-                story.append(Spacer(1, 10))
-
-                ts_str = datetime.now().strftime("%B %d, %Y at %H:%M:%S")
-                meta   = [["Generated", ts_str], ["Engine", "ML Classifier + LIME Explainer"], ["Version", "1.0"]]
-                mt = Table(meta, colWidths=[40*mm, 125*mm])
-                mt.setStyle(TableStyle([
-                    ("FONTNAME",     (0,0),(-1,-1), "Helvetica"),
-                    ("FONTSIZE",     (0,0),(-1,-1), 9),
-                    ("TEXTCOLOR",    (0,0),(0,-1),  C_MUTE),
-                    ("TEXTCOLOR",    (1,0),(1,-1),  C_TEXT),
-                    ("ROWBACKGROUNDS",(0,0),(-1,-1), [C_CARD, C_BG]),
-                    ("TOPPADDING",   (0,0),(-1,-1), 5),
-                    ("BOTTOMPADDING",(0,0),(-1,-1), 5),
-                    ("LEFTPADDING",  (0,0),(-1,-1), 8),
-                ]))
-                story.append(mt)
-                story.append(Spacer(1, 14))
-
-                rd = [["VERDICT", "CONFIDENCE", "RISK LEVEL"],
-                      [label_clean.upper(), f"{conf_pct}%", risk]]
-                rt = Table(rd, colWidths=[65*mm, 45*mm, 55*mm])
-                rt.setStyle(TableStyle([
-                    ("FONTNAME",      (0,0),(-1,0),  "Helvetica-Bold"),
-                    ("FONTNAME",      (0,1),(-1,1),  "Helvetica-Bold"),
-                    ("FONTSIZE",      (0,0),(-1,0),  8),
-                    ("FONTSIZE",      (0,1),(-1,1),  15),
-                    ("TEXTCOLOR",     (0,0),(-1,0),  C_MUTE),
-                    ("TEXTCOLOR",     (0,1),(0,1),   C_RES),
-                    ("TEXTCOLOR",     (1,1),(1,1),   C_BLUE),
-                    ("TEXTCOLOR",     (2,1),(2,1),   C_TEXT),
-                    ("BACKGROUND",    (0,0),(-1,-1), C_CARD),
-                    ("GRID",          (0,0),(-1,-1), 0.5, C_BORD),
-                    ("TOPPADDING",    (0,0),(-1,-1), 9),
-                    ("BOTTOMPADDING", (0,0),(-1,-1), 9),
-                    ("LEFTPADDING",   (0,0),(-1,-1), 12),
-                ]))
-                story.append(rt)
-                story.append(Spacer(1, 14))
-
-                if word_weights:
-                    story.append(Paragraph("KEY INDICATORS (LIME)", t_label))
-                    pos_w = [w for w, s in word_weights if s > 0][:8]
-                    neg_w = [w for w, s in word_weights if s <= 0][:8]
-                    if pos_w:
-                        story.append(Paragraph(f'<font color="#34D399">Phishing signals:</font> {", ".join(pos_w)}', t_body))
-                    if neg_w:
-                        story.append(Paragraph(f'<font color="#FCA5A5">Counter signals:</font> {", ".join(neg_w)}', t_body))
-                    story.append(Spacer(1, 10))
-
-                story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORD))
-                story.append(Paragraph("EMAIL CONTENT", t_label))
-                safe_email = email_text[:2000].replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
-                if len(email_text) > 2000:
-                    safe_email += "... [truncated]"
-                story.append(Paragraph(safe_email, t_body))
-                story.append(Spacer(1, 14))
-                story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORD))
-                story.append(Spacer(1, 6))
-                story.append(Paragraph("Generated by PhishDetect AI — Final Year Cybersecurity Project. For academic use only.", t_footer))
-
-                doc.build(story)
-                buf.seek(0)
-                pdf_bytes = buf.read()
-
-                fname = f"PhishDetect_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-                st.download_button(
-                    label="📥  Download PDF Report",
-                    data=pdf_bytes,
-                    file_name=fname,
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
-
-            except ImportError:
-                st.warning("reportlab not installed — add it to requirements.txt to enable PDF export.")
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        else:
-            st.markdown("""
-            <div style="text-align:center;padding:3.5rem 1rem;color:#334155">
-              <div style="font-size:3rem;margin-bottom:.75rem">🛡️</div>
-              <div style="font-size:.85rem;color:#475569">Paste an email and click <strong style="color:#3B82F6">Analyze</strong> to see the verdict.</div>
-            </div>
-            """, unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ── DASHBOARD ──────────────────────────────────────────────────────────────────
-elif page == "dashboard":
-    st.markdown('<div class="pd-content">', unsafe_allow_html=True)
-
-    if not st.session_state.history:
-        st.markdown("""
-        <div class="pd-card" style="text-align:center;padding:3rem">
-          <div style="font-size:2.5rem;margin-bottom:.75rem">📊</div>
-          <div style="color:#64748B;font-size:.9rem">No scans yet. Go to <strong style="color:#3B82F6">Scan Email</strong> to begin.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        hist   = st.session_state.history
-        total  = len(hist)
-        phish  = sum(1 for h in hist if "legit" not in h["prediction"].lower())
-        legit  = total - phish
-        avg_c  = np.mean([h["confidence"] for h in hist])
-        avg_c  = avg_c if avg_c <= 100 else avg_c  # already pct
-
-        st.markdown(f"""
-        <div class="stat-row">
-          <div class="stat-card"><div class="stat-val">{total}</div><div class="stat-lbl">Total scans</div></div>
-          <div class="stat-card"><div class="stat-val" style="color:#FCA5A5">{phish}</div><div class="stat-lbl">Threats found</div></div>
-          <div class="stat-card"><div class="stat-val" style="color:#34D399">{legit}</div><div class="stat-lbl">Legitimate</div></div>
-          <div class="stat-card"><div class="stat-val">{avg_c:.1f}%</div><div class="stat-lbl">Avg confidence</div></div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        c1, c2 = st.columns([1, 1], gap="medium")
-
-        with c1:
-            st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-            st.markdown('<div class="pd-card-title">📊 Distribution</div>', unsafe_allow_html=True)
-            pred_counts = {}
-            for h in hist:
-                k = h["prediction"].replace("_", " ").title()
-                pred_counts[k] = pred_counts.get(k, 0) + 1
-            pie = px.pie(
-                values=list(pred_counts.values()),
-                names=list(pred_counts.keys()),
-                color=list(pred_counts.keys()),
-                color_discrete_map={
-                    "Legitimate":            "#34D399",
-                    "Traditional Phishing":  "#60A5FA",
-                    "Ai Generated Phishing": "#FCD34D",
-                },
-                hole=0.55,
-            )
-            pie.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", size=11),
-                showlegend=True,
-                legend=dict(font=dict(color="#94A3B8")),
-                margin=dict(l=0, r=0, t=0, b=0),
-                height=220,
-            )
-            st.plotly_chart(pie, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        with c2:
-            st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-            st.markdown('<div class="pd-card-title">📈 Confidence over time</div>', unsafe_allow_html=True)
-            df_hist = pd.DataFrame(hist)
-            line = px.line(
-                df_hist, y="confidence",
-                markers=True,
-                color_discrete_sequence=["#3B82F6"],
-            )
-            line.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", size=11),
-                showlegend=False,
-                margin=dict(l=0, r=0, t=0, b=0),
-                xaxis=dict(gridcolor="#1E293B", zerolinecolor="#334155", title=""),
-                yaxis=dict(gridcolor="#1E293B", zerolinecolor="#334155", title=""),
-                height=220,
-            )
-            st.plotly_chart(line, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-        st.markdown('<div class="pd-card-title">📋 Scan history</div>', unsafe_allow_html=True)
-        df_show = pd.DataFrame(hist)[["timestamp","email_preview","prediction","confidence","risk"]]
-        st.dataframe(df_show, use_container_width=True, hide_index=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ── ABOUT ──────────────────────────────────────────────────────────────────────
-elif page == "about":
-    st.markdown('<div class="pd-content">', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="pd-card">
-      <div class="pd-card-title">ℹ️ About PhishDetect AI</div>
-      <p style="color:#94A3B8;font-size:.9rem;line-height:1.8;margin-bottom:1rem">
-        PhishDetect AI is a final year cybersecurity project that uses machine learning to detect
-        AI-generated phishing emails — a new class of threats that often bypass traditional filters.
-      </p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:1rem">
-        <div style="background:#0F172A;border:1px solid #334155;border-radius:10px;padding:1rem">
-          <div style="font-size:.7rem;color:#64748B;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">ML Stack</div>
-          <div style="font-size:.82rem;color:#E2E8F0;line-height:1.8">scikit-learn<br>TF-IDF Vectorizer<br>Logistic Regression<br>LIME Explainer</div>
-        </div>
-        <div style="background:#0F172A;border:1px solid #334155;border-radius:10px;padding:1rem">
-          <div style="font-size:.7rem;color:#64748B;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">App Stack</div>
-          <div style="font-size:.82rem;color:#E2E8F0;line-height:1.8">Streamlit<br>Plotly<br>ReportLab<br>Python 3.11+</div>
-        </div>
-        <div style="background:#0F172A;border:1px solid #334155;border-radius:10px;padding:1rem">
-          <div style="font-size:.7rem;color:#64748B;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Threat Classes</div>
-          <div style="font-size:.82rem;line-height:1.8">
-            <span style="color:#34D399">● Legitimate</span><br>
-            <span style="color:#60A5FA">● Traditional Phishing</span><br>
-            <span style="color:#FCD34D">● AI-Generated Phishing</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ── Footer ─────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="text-align:center;padding:1.5rem;color:#334155;font-size:.72rem;border-top:1px solid #1E293B;margin-top:1rem">
-  PhishDetect AI &nbsp;·&nbsp; Final Year Cybersecurity Project &nbsp;·&nbsp; Built with Streamlit
-</div>
-""", unsafe_allow_html=True)
+            ""

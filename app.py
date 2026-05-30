@@ -472,7 +472,7 @@ elif page == "scan":
             probs = result.get("probabilities", {})
             if probs:
                 prob_df = pd.DataFrame({
-                    "Class":       [c.replace("_", " ").title() for c in probs.keys()],
+                    "Class":       [str(c.)replace("_", " ").title() for c in probs.keys()],
                     "Probability": [round(v * 100, 1) for v in probs.values()],
                 })
                 fig_prob = px.bar(

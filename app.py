@@ -416,7 +416,7 @@ elif page == "scan":
 
             add_to_history(email_text, result)
 
-            pred = str(result.get("prediction") or "unknown")
+             pred = result["prediction"]
             ll   = pred.lower()
             if "legit" in ll:
                 vclass, icon, bar_color = "verdict-legit", "✅", "#34D399"

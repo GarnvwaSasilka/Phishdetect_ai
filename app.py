@@ -14,6 +14,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Image handling – use a relative path that exists in the zip
-st.image("assets/logo.png", width=200)
+
 
 # Rest of your app...

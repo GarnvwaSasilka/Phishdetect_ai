@@ -448,18 +448,17 @@ elif page == "scan":
             conf        = result["confidence"]
             conf_pct    = int(conf) if conf > 1 else int(conf * 100)
 
-            st.markdown(f"""
-            <div class="{vclass}">
-              <div class="verdict-title">{icon}&nbsp;{label_clean}</div>
-              <div class="verdict-sub">Risk level: <span class="{risk_cls}">{risk}</span></div>
-            </div>
-            <div class="conf-wrap">
-              <div class="conf-hdr">
-                <span>Confidence</span>
-                <span style="font-family:'IBM Plex Mono',monospace;color:{bar_color};font-weight:600">{conf_pct}%</span>
-              </div>
-              <div class="conf-track">
-                <div class="conf-fill" style="width:{conf_pct}%;background:{bar_color}"></div>
-              </div>
-            </div>
-            ""
+            # Corrected f-string - properly terminated
+            st.markdown(
+                f"""
+                <div class="{vclass}">
+                  <div class="verdict-title">{icon}&nbsp;{label_clean}</div>
+                  <div class="verdict-sub">Risk level: <span class="{risk_cls}">{risk}</span></div>
+                </div>
+                <div class="conf-wrap">
+                  <div class="conf-hdr">
+                    <span>Confidence</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;color:{bar_color};font-weight:600">{conf_pct}%</span>
+                  </div>
+                  <div class="conf-track">
+                    <div class="conf-

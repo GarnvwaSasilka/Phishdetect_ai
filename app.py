@@ -461,4 +461,117 @@ elif page == "scan":
                     <span style="font-family:'IBM Plex Mono',monospace;color:{bar_color};font-weight:600">{conf_pct}%</span>
                   </div>
                   <div class="conf-track">
-                    <div class="conf-
+                    <div class="conf-fill" style="width:{conf_pct}%;background:{bar_color}"></div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # Probability chart
+            probs = result.get("probabilities", {})
+            if probs:
+                prob_df = pd.DataFrame({
+                    "Class":       [c.replace("_", " ").title() for c in probs.keys()],
+                    "Probability": [round(v * 100, 1) for v in probs.values()],
+                })
+                fig_prob = px.bar(
+                    prob_df, x="Probability", y="Class", orientation="h",
+                    color="Class",
+                    color_discrete_map={
+                        "Legitimate":              "#34D399",
+                        "Traditional Phishing":    "#60A5FA",
+                        "Ai Generated Phishing":   "#FCD34D"
+                    },
+                    text="Probability"
+                )
+                fig_prob.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#E2E8F0", family="IBM Plex Mono, monospace"),
+                    xaxis_title="Confidence (%)",
+                    yaxis_title="",
+                    height=200,
+                    margin=dict(l=0, r=0, t=0, b=0)
+                )
+                fig_prob.update_traces(texttemplate='%{text}%', textposition='outside')
+                st.plotly_chart(fig_prob, use_container_width=True)
+
+            # LIME explanation
+            if lime_result:
+                st.markdown('<div style="margin-top: 20px;"><strong>🔬 Key words influencing this verdict</strong></div>', unsafe_allow_html=True)
+                pos_words = lime_result.get("positive", [])
+                neg_words = lime_result.get("negative", [])
+                if pos_words or neg_words:
+                    st.markdown('<div class="lime-wrap">', unsafe_allow_html=True)
+                    for word in pos_words:
+                        st.markdown(f'<span class="lime-pill lime-pos">+ {word}</span>', unsafe_allow_html=True)
+                    for word in neg_words:
+                        st.markdown(f'<span class="lime-pill lime-neg">- {word}</span>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.info("No LIME explanation available for this email.")
+            else:
+                st.info("LIME explanation not available.")
+
+            # PDF report download
+            pdf_buffer = generate_pdf_report(email_text, result, lime_result)
+            if pdf_buffer:
+                st.download_button(
+                    label="📄 Download PDF Report",
+                    data=pdf_buffer,
+                    file_name=f"phish_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+        else:
+            st.info("👈 Paste or upload an email and click 'Analyze Email' to see results here.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ── DASHBOARD ──────────────────────────────────────────────────────────────────
+elif page == "dashboard":
+    st.markdown('<div class="pd-content">', unsafe_allow_html=True)
+    st.markdown('<div class="pd-card"><div class="pd-card-title">📈 Scan History & Analytics</div>', unsafe_allow_html=True)
+    if not st.session_state.history:
+        st.info("No scans performed yet. Go to 'Scan Email' to start.")
+    else:
+        df = pd.DataFrame(st.session_state.history)
+        st.dataframe(df, use_container_width=True)
+
+        # Simple metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Scans", len(df))
+        with col2:
+            threat_count = df[df["prediction"] != "legitimate"].shape[0] if "prediction" in df else 0
+            st.metric("Threats Detected", threat_count)
+        with col3:
+            avg_conf = df["confidence"].mean() if "confidence" in df else 0
+            st.metric("Avg Confidence", f"{avg_conf:.1%}")
+
+        # Pie chart of predictions
+        if "prediction" in df:
+            fig = px.pie(df, names="prediction", title="Threat Distribution", color_discrete_sequence=px.colors.qualitative.Set2)
+            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#E2E8F0"))
+            st.plotly_chart(fig, use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ── ABOUT ──────────────────────────────────────────────────────────────────────
+elif page == "about":
+    st.markdown('<div class="pd-content">', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="pd-card">
+      <div class="pd-card-title">🧠 About PhishDetect AI</div>
+      <p><strong>PhishDetect AI</strong> is an experimental cybersecurity tool that uses machine learning to classify emails into three categories: <strong>Legitimate</strong>, <strong>Traditional Phishing</strong>, and <strong>AI-Generated Phishing</strong>.</p>
+      <p>The model is trained on a combination of public phishing datasets and synthetically generated AI‑phishing emails. It uses TF‑IDF vectorization and a logistic regression classifier, achieving ~89% accuracy on test data.</p>
+      <p>For explainability, we integrate <strong>LIME (Local Interpretable Model‑agnostic Explanations)</strong>, which highlights the most influential words behind each prediction.</p>
+      <p><strong>Important:</strong> This tool is for educational and research purposes only. Always verify suspicious emails through official channels and never share sensitive information.</p>
+      <p style="margin-top: 20px; font-size: 0.75rem; color: #64748B;">PhishDetect AI — Built with Streamlit, scikit‑learn, and LIME.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+```

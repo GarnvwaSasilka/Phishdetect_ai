@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8000"
+      - "8501"
+    volumes:
+      # Persist model files so retraining survives restarts
+      - ./model.pkl:/app/model.pkl
+      - ./vectorizer.pkl:/app/vectorizer.pkl
+      - ./svm_final.pkl:/app/svm_final.pkl
+      - ./brands.json:/app/brands.json
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app

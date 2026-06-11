@@ -4,6 +4,8 @@ Dark / Light theme toggle, email scanning, URL checker, dashboard, about.
 """
 
 import re
+import base64
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -35,78 +37,103 @@ st.set_page_config(
 for key, default in {
     "history":   [],
     "page":      "home",
-    "dark_mode": True,
+    "dark_mode": False,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
 dark = st.session_state.dark_mode
 
+# ── SVG icon set — consistent 16px stroke, no emojis ──────────────────────────
+_I = {
+    "shield":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+    "mail":      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 7 10-7"/></svg>',
+    "link":      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+    "chart":     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>',
+    "info":      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+    "home":      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+    "alert":     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    "check":     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+    "bot":       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="10" x="3" y="11" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" x2="8" y1="16" y2="16"/><line x1="16" x2="16" y1="16" y2="16"/></svg>',
+    "scan":      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>',
+    "download":  '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>',
+    "sun":       '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>',
+    "moon":      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+    "signal":    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h.01M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/><path d="M22 4v16"/></svg>',
+}
+
 # ── Theme tokens ───────────────────────────────────────────────────────────────
 DARK = {
-    "bg":            "#0F172A",
-    "bg2":           "#1E293B",
-    "bg3":           "#0F172A",
-    "border":        "#334155",
-    "border_header": "#1E3A5F",
-    "text":          "#E2E8F0",
-    "text_muted":    "#64748B",
-    "text_sub":      "#94A3B8",
-    "accent":        "#3B82F6",
-    "accent_hover":  "#2563EB",
-    "scrollbar_bg":  "#0F172A",
-    "input_bg":      "#0F172A",
-    "input_text":    "#E2E8F0",
-    "input_border":  "#334155",
-    "card_title":    "#64748B",
-    "conf_track":    "#0F172A",
-    "url_domain":    "#E2E8F0",
-    "url_flags":     "#64748B",
-    "chart_font":    "#E2E8F0",
-    "metric_val":    "#3B82F6",
-    "toggle_icon":   "☀️",
-    "toggle_label":  "Light Mode",
-    "toggle_bg":     "rgba(59,130,246,0.12)",
-    "toggle_color":  "#60A5FA",
-    "toggle_border": "rgba(59,130,246,0.25)",
+    "bg":            "#07111C",
+    "bg2":           "#0C1A2A",
+    "bg3":           "#101E30",
+    "border":        "#1A2D42",
+    "border_header": "#162235",
+    "text":          "#BDC8DC",
+    "text_muted":    "#3D5470",
+    "text_sub":      "#6A8DAA",
+    "accent":        "#2B72CC",
+    "accent_hover":  "#3A85E8",
+    "scrollbar_bg":  "#07111C",
+    "input_bg":      "#0C1A2A",
+    "input_text":    "#BDC8DC",
+    "input_border":  "#1A2D42",
+    "card_title":    "#3D5470",
+    "conf_track":    "#1A2D42",
+    "url_domain":    "#BDC8DC",
+    "url_flags":     "#3D5470",
+    "chart_font":    "#BDC8DC",
+    "metric_val":    "#2B72CC",
+    "toggle_label":  "Light",
+    "toggle_bg":     "rgba(43,114,204,0.1)",
+    "toggle_color":  "#5A9AE0",
+    "toggle_border": "rgba(43,114,204,0.2)",
 }
 
 LIGHT = {
-    "bg":            "#F1F5F9",
+    "bg":            "#FAF7F2",
     "bg2":           "#FFFFFF",
-    "bg3":           "#E2E8F0",
-    "border":        "#CBD5E1",
-    "border_header": "#BFDBFE",
-    "text":          "#0F172A",
-    "text_muted":    "#475569",
-    "text_sub":      "#334155",
-    "accent":        "#2563EB",
-    "accent_hover":  "#1D4ED8",
-    "scrollbar_bg":  "#E2E8F0",
+    "bg3":           "#F5EDE0",
+    "border":        "#E8D8C4",
+    "border_header": "#DEC9AE",
+    "text":          "#2C1A0A",
+    "text_muted":    "#9E8068",
+    "text_sub":      "#6B4A32",
+    "accent":        "#C05E1A",
+    "accent_hover":  "#9A4910",
+    "scrollbar_bg":  "#F5EDE0",
     "input_bg":      "#FFFFFF",
-    "input_text":    "#0F172A",
-    "input_border":  "#CBD5E1",
-    "card_title":    "#475569",
-    "conf_track":    "#E2E8F0",
-    "url_domain":    "#0F172A",
-    "url_flags":     "#475569",
-    "chart_font":    "#0F172A",
-    "metric_val":    "#2563EB",
-    "toggle_icon":   "🌙",
-    "toggle_label":  "Dark Mode",
-    "toggle_bg":     "rgba(37,99,235,0.08)",
-    "toggle_color":  "#2563EB",
-    "toggle_border": "rgba(37,99,235,0.2)",
+    "input_text":    "#2C1A0A",
+    "input_border":  "#E8D8C4",
+    "card_title":    "#9E8068",
+    "conf_track":    "#E8D8C4",
+    "url_domain":    "#2C1A0A",
+    "url_flags":     "#9E8068",
+    "chart_font":    "#2C1A0A",
+    "metric_val":    "#C05E1A",
+    "toggle_label":  "Dark",
+    "toggle_bg":     "rgba(192,94,26,0.08)",
+    "toggle_color":  "#C05E1A",
+    "toggle_border": "rgba(192,94,26,0.2)",
 }
 
 T = DARK if dark else LIGHT
+
+
+@st.cache_resource
+def _logo_b64() -> str:
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
 
 # ── CSS ────────────────────────────────────────────────────────────────────────
 def inject_css(t):
     st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@400;600;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
@@ -116,208 +143,299 @@ html, body,
 .stApp {{
     background-color: {t["bg"]} !important;
     color: {t["text"]} !important;
-    font-family: 'Syne', sans-serif !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+    font-size: 14px;
+    line-height: 1.5;
 }}
 
 [data-testid="stHeader"]  {{ display: none !important; }}
 [data-testid="stSidebar"] {{ display: none !important; }}
-.block-container {{ padding: 0 !important; max-width: 100% !important; }}
+.block-container {{ padding: 1.5rem 2.5rem 2rem !important; max-width: 960px !important; margin: 0 auto !important; }}
 footer {{ display: none !important; }}
 #MainMenu {{ display: none !important; }}
 
-::-webkit-scrollbar {{ width: 4px; }}
-::-webkit-scrollbar-track {{ background: {t["scrollbar_bg"]}; }}
-::-webkit-scrollbar-thumb {{ background: {t["accent"]}; border-radius: 2px; }}
+::-webkit-scrollbar {{ width: 3px; height: 3px; }}
+::-webkit-scrollbar-track {{ background: {t["bg"]}; }}
+::-webkit-scrollbar-thumb {{ background: {t["border"]}; border-radius: 1px; }}
 
 /* ── Header ── */
 .pd-header {{
     background: {t["bg"]};
     border-bottom: 1px solid {t["border_header"]};
-    padding: 1rem 2rem;
+    padding: 0.75rem 0;
     display: flex; align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap; gap: 12px;
+    gap: 12px;
 }}
-.pd-logo-row {{ display: flex; align-items: center; gap: 12px; }}
-.pd-logo-icon {{
-    width: 42px; height: 42px;
-    background: linear-gradient(135deg, #3B82F6, #1D4ED8);
-    border-radius: 10px;
+.pd-wordmark {{
+    font-family: 'Inter', sans-serif;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.02em;
+    color: {t["text"]};
+    display: flex; align-items: center; gap: 8px;
+}}
+.pd-logo-img {{
+    height: 38px; width: auto; display: block;
+}}
+.pd-wordmark-shield {{
+    width: 26px; height: 26px;
+    background: {t["accent"]};
+    border-radius: 5px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 22px; flex-shrink: 0;
-    box-shadow: 0 0 20px rgba(59,130,246,0.4);
+    color: #fff; flex-shrink: 0;
 }}
-.pd-logo-text {{ font-size: 1.4rem; font-weight: 800; color: {t["text"]}; letter-spacing: -0.5px; }}
-.pd-logo-text span {{ color: {t["accent"]}; }}
-.pd-badge {{
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10px; font-weight: 600;
-    background: {t["toggle_bg"]};
-    color: {t["toggle_color"]};
-    border: 1px solid {t["toggle_border"]};
-    border-radius: 4px; padding: 2px 8px; letter-spacing: 1px;
+.pd-wordmark-text {{ color: {t["text"]}; }}
+.pd-wordmark-text b {{ color: {t["accent"]}; font-weight: 700; }}
+.pd-ver {{
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; color: {t["text_muted"]};
+    border: 1px solid {t["border"]};
+    padding: 1px 5px; border-radius: 3px;
+    letter-spacing: 0.04em; vertical-align: middle;
 }}
-.pd-status {{ display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #34D399; }}
-.pd-status-dot {{ width: 7px; height: 7px; background: #34D399; border-radius: 50%; animation: pulse-dot 2s infinite; }}
-@keyframes pulse-dot {{
-    0%,100% {{ opacity:1; box-shadow: 0 0 0 0 rgba(52,211,153,0.4); }}
-    50%      {{ opacity:.8; box-shadow: 0 0 0 5px rgba(52,211,153,0); }}
+.pd-status {{
+    display: flex; align-items: center; gap: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px; color: #1FAD72;
+    letter-spacing: 0.05em;
+}}
+.pd-status-dot {{
+    width: 5px; height: 5px; background: #1FAD72;
+    border-radius: 50%;
+    animation: blink 3s step-end infinite;
+}}
+@keyframes blink {{
+    0%,100% {{ opacity:1; }} 50% {{ opacity:0.35; }}
+}}
+
+/* ── Nav — flat tab style ── */
+.pd-nav-bar {{
+    background: {t["bg"]};
+    border-bottom: 1px solid {t["border"]};
+    padding: 0;
+    display: flex; gap: 0;
+    margin-bottom: 1.25rem;
+}}
+
+/* Flatten ALL nav buttons to look like text tabs */
+[data-testid="stHorizontalBlock"] button {{
+    background: transparent !important;
+    color: {t["text_muted"]} !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.07em !important;
+    text-transform: uppercase !important;
+    padding: 0.55rem 0.4rem !important;
+    box-shadow: none !important;
+    transition: color 0.15s !important;
+    width: 100% !important;
+}}
+[data-testid="stHorizontalBlock"] button:hover {{
+    background: transparent !important;
+    color: {t["text"]} !important;
+    transform: none !important;
+    box-shadow: none !important;
+    border-bottom-color: {t["border"]} !important;
+    opacity: 1 !important;
 }}
 
 /* ── Layout ── */
-.pd-content {{ padding: 1.5rem 2rem; }}
+.pd-content {{ padding: 0.25rem 0 1.5rem; }}
 @media (max-width: 768px) {{
-    .pd-header  {{ padding: .75rem 1rem; }}
-    .pd-content {{ padding: 1rem; }}
+    .block-container {{ padding: 1rem 1.25rem 1.5rem !important; }}
+    .pd-header  {{ padding: 0.5rem 0; }}
+    .pd-content {{ padding: 0.25rem 0 1rem; }}
 }}
 
 /* ── Cards ── */
 .pd-card {{
     background: {t["bg2"]};
     border: 1px solid {t["border"]};
-    border-radius: 16px; padding: 1.5rem;
-    margin-bottom: 16px; transition: border-color .2s;
+    border-radius: 6px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 10px;
+    transition: border-color 0.15s;
 }}
-.pd-card:hover {{ border-color: {t["accent"]}; }}
+.pd-card:hover {{ border-color: {t["accent"]}40; }}
 .pd-card-title {{
-    font-size: .68rem; font-weight: 600;
-    letter-spacing: 1.5px; text-transform: uppercase;
-    color: {t["card_title"]}; margin-bottom: 1rem;
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: {t["card_title"]};
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid {t["border"]};
 }}
 
 /* ── Metrics ── */
-.pd-metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 16px; }}
-.pd-metric {{ background: {t["bg2"]}; border: 1px solid {t["border"]}; border-radius: 12px; padding: 1rem; transition: border-color .2s; }}
-.pd-metric:hover {{ border-color: {t["accent"]}; }}
-.pd-metric-val {{ font-family: 'IBM Plex Mono', monospace; font-size: 1.6rem; font-weight: 600; color: {t["metric_val"]}; }}
-.pd-metric-lbl {{ font-size: .72rem; color: {t["text_muted"]}; margin-top: 2px; }}
+.pd-metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 10px; }}
+.pd-metric {{ background: {t["bg2"]}; border: 1px solid {t["border"]}; border-radius: 5px; padding: 0.75rem 0.9rem; }}
+.pd-metric-val {{ font-family: 'JetBrains Mono', monospace; font-size: 1.4rem; font-weight: 500; color: {t["metric_val"]}; line-height: 1; }}
+.pd-metric-lbl {{ font-size: 10px; color: {t["text_muted"]}; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.06em; }}
 
-/* ── Verdicts ── */
-.verdict-legit {{ background: rgba(16,185,129,.1);  border: 1px solid rgba(16,185,129,.3); color: #059669; border-radius: 12px; padding: 1.25rem; text-align: center; }}
-.verdict-phish {{ background: rgba(239,68,68,.1);   border: 1px solid rgba(239,68,68,.3);  color: #DC2626; border-radius: 12px; padding: 1.25rem; text-align: center; }}
-.verdict-ai    {{ background: rgba(245,158,11,.1);  border: 1px solid rgba(245,158,11,.3); color: #D97706; border-radius: 12px; padding: 1.25rem; text-align: center; }}
-.verdict-title {{ font-size: 1.3rem; font-weight: 800; }}
-.verdict-sub   {{ font-size: .8rem; color: inherit; opacity: .8; margin-top: 4px; }}
+/* ── Verdict strip — left-border, data-first ── */
+.verdict-row {{
+    display: flex; align-items: center; gap: 12px;
+    padding: 0.8rem 1rem;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}}
+.verdict-row-legit {{ background: rgba(13,175,128,0.07); border-left: 3px solid #0DAF80; }}
+.verdict-row-phish {{ background: rgba(217,119,6,0.07);  border-left: 3px solid #D97706; }}
+.verdict-row-ai    {{ background: rgba(139,92,246,0.07); border-left: 3px solid #8B5CF6; }}
+.verdict-icon {{
+    width: 30px; height: 30px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}}
+.verdict-icon-legit {{ background: rgba(13,175,128,0.12);  color: #0DAF80; }}
+.verdict-icon-phish {{ background: rgba(217,119,6,0.12);   color: #D97706; }}
+.verdict-icon-ai    {{ background: rgba(139,92,246,0.12);  color: #8B5CF6; }}
+.verdict-label {{ font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }}
+.verdict-meta  {{ font-size: 10px; color: {t["text_muted"]}; margin-top: 2px; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.03em; }}
 
 /* ── Confidence bar ── */
-.conf-wrap {{ margin: .75rem 0; }}
-.conf-hdr  {{ display: flex; justify-content: space-between; font-size: .75rem; color: {t["text_muted"]}; margin-bottom: 6px; }}
-.conf-track {{ background: {t["conf_track"]}; border-radius: 99px; height: 8px; }}
-.conf-fill  {{ height: 8px; border-radius: 99px; }}
-
-/* ── LIME pills ── */
-.lime-wrap {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }}
-.lime-pill {{ font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 3px 10px; border-radius: 99px; }}
-.lime-pos  {{ background: rgba(16,185,129,.15); color: #059669; border: 1px solid rgba(16,185,129,.3); }}
-.lime-neg  {{ background: rgba(239,68,68,.15);  color: #DC2626; border: 1px solid rgba(239,68,68,.3); }}
+.conf-wrap {{ margin: 0.5rem 0 0.75rem; }}
+.conf-hdr  {{
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: {t["text_muted"]};
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 5px; letter-spacing: 0.04em;
+}}
+.conf-track {{ background: {t["conf_track"]}; border-radius: 1px; height: 3px; }}
+.conf-fill  {{ height: 3px; border-radius: 1px; transition: width 0.3s ease; }}
 
 /* ── Risk badges ── */
-.risk-critical {{ background: rgba(139,0,0,.15);   color: #DC2626; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 700; }}
-.risk-high     {{ background: rgba(239,68,68,.15);  color: #DC2626; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 700; }}
-.risk-medium   {{ background: rgba(245,158,11,.15); color: #D97706; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 700; }}
-.risk-low      {{ background: rgba(16,185,129,.15); color: #059669; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 700; }}
+.risk-critical {{ background: rgba(139,92,246,0.12); color: #8B5CF6; border: 1px solid rgba(139,92,246,0.25); border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.05em; }}
+.risk-high     {{ background: rgba(217,119,6,0.12);  color: #D97706; border: 1px solid rgba(217,119,6,0.25);  border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.05em; }}
+.risk-medium   {{ background: rgba(43,114,204,0.12); color: #5A9AE0; border: 1px solid rgba(43,114,204,0.25); border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.05em; }}
+.risk-low      {{ background: rgba(13,175,128,0.12); color: #0DAF80; border: 1px solid rgba(13,175,128,0.25); border-radius: 3px; padding: 1px 7px; font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.05em; }}
+
+/* ── LIME tokens ── */
+.lime-wrap {{ display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }}
+.lime-pill {{ font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 7px; border-radius: 3px; }}
+.lime-pos  {{ background: rgba(13,175,128,0.1); color: #0DAF80; border: 1px solid rgba(13,175,128,0.2); }}
+.lime-neg  {{ background: rgba(217,119,6,0.1);  color: #D97706; border: 1px solid rgba(217,119,6,0.2); }}
 
 /* ── URL rows ── */
-.url-row-safe     {{ border-left: 3px solid #34D399; padding: 6px 10px; margin-bottom: 6px; background: rgba(16,185,129,.06);  border-radius: 0 8px 8px 0; }}
-.url-row-medium   {{ border-left: 3px solid #F59E0B; padding: 6px 10px; margin-bottom: 6px; background: rgba(245,158,11,.06);  border-radius: 0 8px 8px 0; }}
-.url-row-high     {{ border-left: 3px solid #EF4444; padding: 6px 10px; margin-bottom: 6px; background: rgba(239,68,68,.06);   border-radius: 0 8px 8px 0; }}
-.url-row-critical {{ border-left: 3px solid #DC2626; padding: 6px 10px; margin-bottom: 6px; background: rgba(220,38,38,.08);   border-radius: 0 8px 8px 0; }}
-.url-domain {{ font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: {t["url_domain"]}; word-break: break-all; }}
-.url-flags  {{ font-size: 11px; color: {t["url_flags"]}; margin-top: 2px; }}
+.url-row-safe     {{ border-left: 2px solid #0DAF80; padding: 5px 10px; margin-bottom: 4px; background: rgba(13,175,128,0.04); border-radius: 0 4px 4px 0; }}
+.url-row-medium   {{ border-left: 2px solid #D97706; padding: 5px 10px; margin-bottom: 4px; background: rgba(217,119,6,0.04);  border-radius: 0 4px 4px 0; }}
+.url-row-high     {{ border-left: 2px solid #E03A3A; padding: 5px 10px; margin-bottom: 4px; background: rgba(224,58,58,0.04);  border-radius: 0 4px 4px 0; }}
+.url-row-critical {{ border-left: 2px solid #8B5CF6; padding: 5px 10px; margin-bottom: 4px; background: rgba(139,92,246,0.04); border-radius: 0 4px 4px 0; }}
+.url-domain {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: {t["url_domain"]}; word-break: break-all; }}
+.url-flags  {{ font-size: 10px; color: {t["url_flags"]}; margin-top: 2px; font-family: 'JetBrains Mono', monospace; }}
 
 /* ── Header analysis rows ── */
-.hdr-row {{
-    display: flex; justify-content: space-between; align-items: flex-start;
-    padding: 6px 0; border-bottom: 1px solid {t["border"]}; gap: 12px;
-}}
-.hdr-label {{ font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: {t["text_muted"]}; min-width: 110px; flex-shrink: 0; }}
-.hdr-value {{ font-size: 12px; color: {t["text"]}; word-break: break-all; }}
-.hdr-flag  {{ font-size: 11px; color: #F59E0B; margin-top: 3px; }}
+.hdr-row {{ display: flex; justify-content: space-between; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid {t["border"]}; gap: 12px; }}
+.hdr-label {{ font-family: 'JetBrains Mono', monospace; font-size: 10px; color: {t["text_muted"]}; min-width: 96px; flex-shrink: 0; }}
+.hdr-value {{ font-size: 11px; color: {t["text"]}; word-break: break-all; font-family: 'JetBrains Mono', monospace; }}
+.hdr-flag  {{ font-size: 10px; color: #D97706; margin-top: 3px; font-family: 'JetBrains Mono', monospace; }}
 
 /* ── Inputs ── */
 [data-testid="stTextArea"] textarea,
 [data-testid="stTextInput"] input {{
-    background:  {t["input_bg"]}     !important;
-    border:      1px solid {t["input_border"]} !important;
-    border-radius: 10px              !important;
-    color:       {t["input_text"]}   !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size:   13px                !important;
+    background:    {t["input_bg"]}    !important;
+    border:        1px solid {t["input_border"]} !important;
+    border-radius: 5px               !important;
+    color:         {t["input_text"]}  !important;
+    font-family:   'JetBrains Mono', monospace !important;
+    font-size:     12px               !important;
 }}
 [data-testid="stTextArea"] textarea:focus,
 [data-testid="stTextInput"] input:focus {{
-    border-color: {t["accent"]}                       !important;
-    box-shadow:   0 0 0 1px {t["accent"]}             !important;
+    border-color: {t["accent"]}      !important;
+    box-shadow:   0 0 0 1px {t["accent"]}40 !important;
 }}
 
-/* ── Buttons ── */
+/* ── Action buttons ── */
 [data-testid="stButton"] > button {{
-    background:    linear-gradient(135deg, {t["accent"]}, {t["accent_hover"]}) !important;
-    color:         #fff   !important;
-    border:        none   !important;
-    border-radius: 10px   !important;
-    font-family:   'Syne', sans-serif !important;
-    font-weight:   700    !important;
-    font-size:     .85rem !important;
-    padding:       .65rem 1.5rem !important;
-    width:         100%   !important;
-    transition:    all .2s !important;
+    background:    {t["accent"]}     !important;
+    color:         #fff              !important;
+    border:        none              !important;
+    border-radius: 5px               !important;
+    font-family:   'Inter', sans-serif !important;
+    font-weight:   600               !important;
+    font-size:     12px              !important;
+    letter-spacing: 0.02em          !important;
+    padding:       0.5rem 1.2rem    !important;
+    width:         100%              !important;
+    transition:    background 0.15s !important;
+    box-shadow:    none              !important;
 }}
 [data-testid="stButton"] > button:hover {{
-    opacity:    .92 !important;
-    box-shadow: 0 0 20px rgba(59,130,246,.35) !important;
-    transform:  translateY(-1px) !important;
+    background:  {t["accent_hover"]} !important;
+    transform:   none                !important;
+    box-shadow:  none                !important;
+    opacity:     1                   !important;
 }}
 [data-testid="stDownloadButton"] > button {{
-    background:    linear-gradient(135deg, #059669, #047857) !important;
-    color:         #fff   !important;
-    border:        none   !important;
-    border-radius: 10px   !important;
-    font-family:   'Syne', sans-serif !important;
-    font-weight:   700    !important;
-    font-size:     .85rem !important;
-    padding:       .65rem 1.5rem !important;
-    width:         100%   !important;
-    transition:    all .2s !important;
+    background:    #0A7A5A           !important;
+    color:         #fff              !important;
+    border:        none              !important;
+    border-radius: 5px               !important;
+    font-family:   'Inter', sans-serif !important;
+    font-weight:   600               !important;
+    font-size:     12px              !important;
+    padding:       0.5rem 1.2rem    !important;
+    width:         100%              !important;
+    transition:    background 0.15s !important;
 }}
 [data-testid="stDownloadButton"] > button:hover {{
-    background:    linear-gradient(135deg, #10B981, #059669) !important;
-    box-shadow:    0 0 20px rgba(16,185,129,.35) !important;
-    transform:     translateY(-1px) !important;
+    background: #0C9468 !important;
+    transform:  none    !important;
+    box-shadow: none    !important;
 }}
 
 /* ── Misc Streamlit overrides ── */
-[data-testid="stRadio"] label     {{ color: {t["text_sub"]} !important; font-size: .85rem !important; }}
-[data-testid="stFileUploader"]    {{ background: {t["bg2"]} !important; border: 1px dashed {t["border"]} !important; border-radius: 10px !important; }}
+[data-testid="stRadio"] label     {{ color: {t["text_sub"]} !important; font-size: 12px !important; font-family: 'Inter', sans-serif !important; }}
+[data-testid="stFileUploader"]    {{ background: {t["bg2"]} !important; border: 1px dashed {t["border"]} !important; border-radius: 5px !important; }}
 [data-testid="stSpinner"]         {{ color: {t["accent"]} !important; }}
-[data-testid="stAlert"]           {{ background: {t["bg2"]} !important; border-left: 3px solid {t["accent"]} !important; color: {t["text"]} !important; }}
-.stDataFrame                      {{ background: {t["bg2"]} !important; border-radius: 10px !important; }}
-[data-testid="stExpander"]        {{ background: {t["bg2"]} !important; border: 1px solid {t["border"]} !important; border-radius: 10px !important; }}
-[data-testid="stMetricValue"]     {{ color: {t["metric_val"]} !important; }}
-[data-testid="stMetricLabel"]     {{ color: {t["text_muted"]} !important; }}
+[data-testid="stAlert"]           {{ background: {t["bg2"]} !important; border-left: 2px solid {t["accent"]} !important; color: {t["text"]} !important; border-radius: 0 4px 4px 0 !important; }}
+.stDataFrame                      {{ background: {t["bg2"]} !important; border-radius: 5px !important; }}
+[data-testid="stExpander"]        {{ background: {t["bg2"]} !important; border: 1px solid {t["border"]} !important; border-radius: 5px !important; }}
+[data-testid="stMetricValue"]     {{ color: {t["metric_val"]} !important; font-family: 'JetBrains Mono', monospace !important; }}
+[data-testid="stMetricLabel"]     {{ color: {t["text_muted"]} !important; font-size: 10px !important; }}
 .js-plotly-plot .plotly .bg       {{ fill: transparent !important; }}
 
-/* ── Hero ── */
-.hero-title  {{ font-size: clamp(1.6rem,3.5vw,2.4rem); font-weight: 800; color: {t["text"]}; line-height: 1.2; margin-bottom: .5rem; }}
-.hero-accent {{ color: {t["accent"]}; }}
-.hero-sub    {{ font-size: .9rem; color: {t["text_sub"]}; line-height: 1.7; max-width: 560px; }}
+/* ── Threat class grid (home) ── */
+.threat-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); gap: 8px; margin-top: 1.25rem; }}
+.tc {{
+    border-radius: 5px; padding: 0.85rem 1rem;
+    border: 1px solid; font-size: 12px;
+}}
+.tc-safe  {{ background: rgba(13,175,128,0.06); border-color: rgba(13,175,128,0.2); }}
+.tc-warn  {{ background: rgba(217,119,6,0.06);  border-color: rgba(217,119,6,0.2);  }}
+.tc-ai    {{ background: rgba(139,92,246,0.06); border-color: rgba(139,92,246,0.2); }}
+.tc-name  {{ font-weight: 700; font-size: 12px; margin-bottom: 4px; }}
+.tc-safe .tc-name  {{ color: #0DAF80; }}
+.tc-warn .tc-name  {{ color: #D97706; }}
+.tc-ai   .tc-name  {{ color: #8B5CF6; }}
+.tc-desc  {{ font-size: 11px; color: {t["text_muted"]}; line-height: 1.5; }}
 
 /* ── Feature grid ── */
-.feature-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 1.5rem; }}
-.feature-item {{
-    background: {t["bg2"]}; border: 1px solid {t["border"]};
-    border-radius: 12px; padding: 1.1rem;
-    transition: border-color .2s, transform .2s;
-}}
-.feature-item:hover {{ border-color: {t["accent"]}; transform: translateY(-2px); }}
-.feature-icon {{ font-size: 1.4rem; margin-bottom: 8px; }}
-.feature-name {{ font-size: .85rem; font-weight: 700; color: {t["text"]}; }}
-.feature-desc {{ font-size: .75rem; color: {t["text_muted"]}; margin-top: 3px; line-height: 1.5; }}
+.feature-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 1rem; }}
+.feature-item {{ background: {t["bg2"]}; border: 1px solid {t["border"]}; border-radius: 5px; padding: 0.85rem 1rem; transition: border-color 0.15s; }}
+.feature-item:hover {{ border-color: {t["accent"]}40; }}
+.feature-icon {{ font-size: 13px; margin-bottom: 6px; color: {t["accent"]}; }}
+.feature-name {{ font-size: 12px; font-weight: 600; color: {t["text"]}; }}
+.feature-desc {{ font-size: 11px; color: {t["text_muted"]}; margin-top: 3px; line-height: 1.45; }}
+
+/* ── Hero ── */
+.hero-title  {{ font-size: clamp(1.2rem,2.4vw,1.75rem); font-weight: 700; color: {t["text"]}; line-height: 1.2; margin-bottom: 0.4rem; letter-spacing: -0.02em; }}
+.hero-accent {{ color: {t["accent"]}; }}
+.hero-sub    {{ font-size: 13px; color: {t["text_sub"]}; line-height: 1.65; max-width: 540px; }}
 
 @media (max-width: 640px) {{
-    .verdict-title {{ font-size: 1rem; }}
-    .pd-metric-val {{ font-size: 1.2rem; }}
-    .hero-title    {{ font-size: 1.4rem; }}
+    .pd-metric-val {{ font-size: 1.1rem; }}
+    .hero-title    {{ font-size: 1.1rem; }}
+    .verdict-label {{ font-size: 13px; }}
+}}
+
+@media (prefers-reduced-motion: reduce) {{
+    *, *::before, *::after {{ animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }}
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -375,42 +493,42 @@ def parse_email_headers(raw_text: str) -> dict:
     ret_domain = _domain(ret_path)
 
     if reply_to and frm_domain and rpt_domain and frm_domain != rpt_domain:
-        flags.append(f"⚠️ From domain ({frm_domain}) ≠ Reply-To domain ({rpt_domain})")
+        flags.append(f"From domain ({frm_domain}) ≠ Reply-To domain ({rpt_domain})")
 
     if ret_path and frm_domain and ret_domain and frm_domain != ret_domain:
-        flags.append(f"⚠️ From domain ({frm_domain}) ≠ Return-Path domain ({ret_domain})")
+        flags.append(f"From domain ({frm_domain}) ≠ Return-Path domain ({ret_domain})")
 
     # SPF/DKIM/DMARC failures
-    if headers["SPF"]   == "fail": flags.append("🚨 SPF check FAILED — sender not authorised")
-    if headers["DKIM"]  == "fail": flags.append("🚨 DKIM signature FAILED — message may be tampered")
-    if headers["DMARC"] == "fail": flags.append("🚨 DMARC policy FAILED")
+    if headers["SPF"]   == "fail": flags.append("SPF check FAILED — sender not authorised")
+    if headers["DKIM"]  == "fail": flags.append("DKIM signature FAILED — message may be tampered")
+    if headers["DMARC"] == "fail": flags.append("DMARC policy FAILED")
 
     # Suspicious subject keywords
     subj_triggers = ["urgent", "verify", "suspended", "confirm", "password", "prize",
                      "winner", "account", "click", "free", "limited", "act now", "alert"]
     for kw in subj_triggers:
         if kw in subj.lower():
-            flags.append(f"⚠️ Suspicious subject keyword: '{kw}'")
+            flags.append(f"Suspicious subject keyword: '{kw}'")
             break
 
     # No Message-ID
     if not headers["Message-ID"]:
-        flags.append("⚠️ Missing Message-ID header (common in spoofed emails)")
+        flags.append("Missing Message-ID header (common in spoofed emails)")
 
     # Excessive hops
     hops = int(headers["Received hops"])
     if hops > 6:
-        flags.append(f"⚠️ Unusually high hop count ({hops}) — may indicate routing obfuscation")
+        flags.append(f"Unusually high hop count ({hops}) — may indicate routing obfuscation")
 
     return {"fields": headers, "flags": flags}
 
 
 def _auth_badge(val: str) -> str:
     if val == "pass":
-        return '<span style="color:#34D399;font-weight:700;font-family:\'IBM Plex Mono\',monospace">✔ pass</span>'
+        return '<span style="color:#0DAF80;font-weight:600;font-family:\'JetBrains Mono\',monospace;font-size:.8rem">pass</span>'
     if val == "fail":
-        return '<span style="color:#EF4444;font-weight:700;font-family:\'IBM Plex Mono\',monospace">✘ fail</span>'
-    return '<span style="color:#94A3B8;font-family:\'IBM Plex Mono\',monospace">— none</span>'
+        return '<span style="color:#D97706;font-weight:600;font-family:\'JetBrains Mono\',monospace;font-size:.8rem">fail</span>'
+    return '<span style="color:#3D5470;font-family:\'JetBrains Mono\',monospace;font-size:.8rem">—</span>'
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -453,7 +571,7 @@ def _chart_layout(height: int = 220):
     return dict(
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color=T["chart_font"], family="IBM Plex Mono, monospace"),
+        font=dict(color=T["chart_font"], family="JetBrains Mono, monospace", size=11),
         height=height,
         margin=dict(l=0, r=0, t=30, b=0),
     )
@@ -461,82 +579,105 @@ def _chart_layout(height: int = 220):
 
 def _verdict_html(pred_label: str, confidence: float, risk: str) -> str:
     if "ai" in pred_label or "generated" in pred_label:
-        css   = "verdict-ai"
-        icon  = "🤖"
-        title = "AI-Generated Phishing"
-        sub   = "High-sophistication AI-crafted threat detected"
+        row_cls  = "verdict-row-ai"
+        icon_cls = "verdict-icon-ai"
+        icon_svg = _I["bot"]
+        title    = "AI-Generated Phishing"
+        meta     = "high-sophistication · AI-crafted language"
+        conf_col = "#8B5CF6"
     elif "phishing" in pred_label:
-        css   = "verdict-phish"
-        icon  = "🚨"
-        title = "Traditional Phishing"
-        sub   = "Classic phishing patterns detected"
+        row_cls  = "verdict-row-phish"
+        icon_cls = "verdict-icon-phish"
+        icon_svg = _I["alert"]
+        title    = "Traditional Phishing"
+        meta     = "classic credential-harvesting pattern"
+        conf_col = "#D97706"
     else:
-        css   = "verdict-legit"
-        icon  = "✅"
-        title = "Legitimate Email"
-        sub   = "No phishing indicators found"
+        row_cls  = "verdict-row-legit"
+        icon_cls = "verdict-icon-legit"
+        icon_svg = _I["check"]
+        title    = "Legitimate Email"
+        meta     = "no phishing indicators found"
+        conf_col = "#0DAF80"
 
-    conf_color = "#34D399" if "legit" in pred_label else (
-        "#F59E0B" if "ai" in pred_label else "#EF4444"
-    )
     return f"""
-    <div class="{css}">
-      <div class="verdict-title">{icon} {title}</div>
-      <div class="verdict-sub">{sub}</div>
+    <div class="verdict-row {row_cls}">
+      <div class="verdict-icon {icon_cls}">{icon_svg}</div>
+      <div style="flex:1;min-width:0">
+        <div class="verdict-label" style="color:{conf_col}">{title}</div>
+        <div class="verdict-meta">{meta}</div>
+      </div>
+      <span class="{_risk_css(risk)}">{risk}</span>
     </div>
     <div class="conf-wrap">
       <div class="conf-hdr">
-        <span>Confidence</span>
-        <span style="color:{conf_color};font-family:'IBM Plex Mono',monospace;font-weight:600">
-          {confidence:.1f}%
-        </span>
+        <span>confidence</span>
+        <span style="color:{conf_col}">{confidence:.1f}%</span>
       </div>
       <div class="conf-track">
-        <div class="conf-fill" style="width:{confidence}%;background:{conf_color}"></div>
+        <div class="conf-fill" style="width:{confidence}%;background:{conf_col}"></div>
       </div>
-    </div>
-    <div style="display:flex;gap:8px;justify-content:center;margin-top:8px">
-      <span class="{_risk_css(risk)}">{risk} Risk</span>
     </div>
     """
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
-header_col, toggle_col = st.columns([8, 1])
+toggle_icon = _I["sun"] if dark else _I["moon"]
+header_col, toggle_col = st.columns([9, 1])
 with header_col:
+    _lb = _logo_b64()
+    _logo_html = (
+        f'<img src="data:image/png;base64,{_lb}" class="pd-logo-img" alt="PhishDetect AI">'
+        if _lb else
+        f'<div class="pd-wordmark-shield">{_I["shield"]}</div><span class="pd-wordmark-text">PHISH<b>DETECT</b></span>'
+    )
     st.markdown(f"""
     <div class="pd-header">
-      <div class="pd-logo-row">
-        <div class="pd-logo-icon">🛡️</div>
-        <div>
-          <div class="pd-logo-text">Phish<span>Detect</span> AI</div>
-          <div class="pd-badge">ML-POWERED · CYBERSECURITY</div>
-        </div>
+      <div class="pd-wordmark">
+        {_logo_html}
+        <span class="pd-ver">v2.0</span>
       </div>
-      <div class="pd-status"><div class="pd-status-dot"></div>SYSTEM OPERATIONAL</div>
+      <div class="pd-status">
+        <div class="pd-status-dot"></div>OPERATIONAL
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
 with toggle_col:
-    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-    if st.button(f"{T['toggle_icon']} {T['toggle_label']}", key="theme_toggle", use_container_width=True):
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+    if st.button(f"{T['toggle_label']}", key="theme_toggle", use_container_width=True):
         st.session_state.dark_mode = not st.session_state.dark_mode
         st.rerun()
 
-# ── Nav ────────────────────────────────────────────────────────────────────────
+# ── Nav — underline tab style ──────────────────────────────────────────────────
 pages = {
-    "home":      "🏠 Home",
-    "scan":      "📧 Scan Email",
-    "url":       "🔗 URL Checker",
-    "dashboard": "📊 Dashboard",
-    "about":     "ℹ️ About",
+    "home":      "Home",
+    "scan":      "Scan Email",
+    "url":       "URL Checker",
+    "dashboard": "Dashboard",
+    "about":     "About",
 }
+page = st.session_state.page
+
+# Inject active-state underline for the current page tab
+active_idx = list(pages.keys()).index(page) + 1
+st.markdown(f"""
+<style>
+[data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child({active_idx}) button {{
+    color: {T["text"]} !important;
+    border-bottom: 2px solid {T["accent"]} !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="pd-nav-bar">', unsafe_allow_html=True)
 nav_cols = st.columns(len(pages))
 for i, (key, label) in enumerate(pages.items()):
     with nav_cols[i]:
         if st.button(label, key=f"nav_{key}", use_container_width=True):
             st.session_state.page = key
             st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
 page = st.session_state.page
 
@@ -549,51 +690,63 @@ if page == "home":
     st.markdown(f"""
     <div class="pd-card">
       <div class="hero-title">
-        Detect Phishing Emails with <span class="hero-accent">AI Precision</span>
+        Email Threat Classification<br>
+        <span class="hero-accent">Multi-Signal · Explainable · Actionable</span>
       </div>
       <p class="hero-sub">
-        PhishDetect AI uses machine learning to classify emails as Legitimate,
-        Traditional Phishing, or AI-Generated Phishing — with LIME word-level
-        explanations, email header analysis, and real-time URL safety checks.
+        PhishDetect AI combines TF-IDF machine learning with real-time signal
+        fusion — sender reputation, header authentication, URL risk, and template
+        detection — to classify emails across three threat classes with word-level
+        LIME explanations for every verdict.
       </p>
     </div>
-    <div class="feature-grid">
+
+    <div class="threat-grid">
+      <div class="tc tc-safe">
+        <div class="tc-name">{_I["check"]} Legitimate</div>
+        <div class="tc-desc">Verified sender alignment, clean headers, no payload indicators</div>
+      </div>
+      <div class="tc tc-warn">
+        <div class="tc-name">{_I["alert"]} Traditional Phishing</div>
+        <div class="tc-desc">Credential harvesting patterns, spoofed domains, malicious URLs</div>
+      </div>
+      <div class="tc tc-ai">
+        <div class="tc-name">{_I["bot"]} AI-Generated Phishing</div>
+        <div class="tc-desc">High-fluency AI-crafted language with deceptive intent signatures</div>
+      </div>
+    </div>
+
+    <div class="feature-grid" style="margin-top:10px">
       <div class="feature-item">
-        <div class="feature-icon">🤖</div>
+        <div class="feature-icon">{_I["scan"]}</div>
         <div class="feature-name">ML Classification</div>
-        <div class="feature-desc">TF-IDF + classifier tuned for 3-class phishing detection</div>
+        <div class="feature-desc">LR + SVM ensemble on 15K TF-IDF features, soft-vote blended</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">🔬</div>
+        <div class="feature-icon">{_I["chart"]}</div>
         <div class="feature-name">LIME Explainability</div>
         <div class="feature-desc">Word-level explanations showing exactly what triggered the verdict</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">📨</div>
+        <div class="feature-icon">{_I["mail"]}</div>
         <div class="feature-name">Header Analysis</div>
-        <div class="feature-desc">Sender/receiver, SPF, DKIM, DMARC, Reply-To mismatch detection</div>
+        <div class="feature-desc">SPF, DKIM, DMARC, Reply-To mismatch, sender-brand alignment</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">🔗</div>
-        <div class="feature-name">URL Analysis</div>
+        <div class="feature-icon">{_I["link"]}</div>
+        <div class="feature-name">URL Risk Scoring</div>
         <div class="feature-desc">Auto-extraction and risk-scoring of every URL in an email</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">📄</div>
-        <div class="feature-name">PDF Reports</div>
-        <div class="feature-desc">Downloadable threat reports for documentation and compliance</div>
+        <div class="feature-icon">{_I["signal"]}</div>
+        <div class="feature-name">Signal Fusion</div>
+        <div class="feature-desc">Weighted oracle interpolation blends ML output with domain signals</div>
       </div>
       <div class="feature-item">
-        <div class="feature-icon">🎨</div>
-        <div class="feature-name">Dark / Light Theme</div>
-        <div class="feature-desc">Toggle between dark and light mode with the button top-right</div>
+        <div class="feature-icon">{_I["download"]}</div>
+        <div class="feature-name">PDF Reports</div>
+        <div class="feature-desc">ReportLab-generated threat reports for documentation and compliance</div>
       </div>
-    </div>
-    <div class="pd-metrics" style="margin-top:16px">
-      <div class="pd-metric"><div class="pd-metric-val">3</div><div class="pd-metric-lbl">Threat classes</div></div>
-      <div class="pd-metric"><div class="pd-metric-val">LIME</div><div class="pd-metric-lbl">Explainability</div></div>
-      <div class="pd-metric"><div class="pd-metric-val">HDR</div><div class="pd-metric-lbl">Header checks</div></div>
-      <div class="pd-metric"><div class="pd-metric-val">PDF</div><div class="pd-metric-lbl">Reports</div></div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
@@ -608,15 +761,15 @@ elif page == "scan":
 
     with left:
         st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-        st.markdown('<div class="pd-card-title">✉️ Email Input</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pd-card-title">{_I["mail"]} Email Input</div>', unsafe_allow_html=True)
 
         input_method = st.radio(
-            "Input method:", ["✏️ Paste Text", "📁 Upload File"],
+            "Input method:", ["Paste Text", "Upload File"],
             horizontal=True, label_visibility="collapsed",
         )
 
         email_text = ""
-        if input_method == "✏️ Paste Text":
+        if input_method == "Paste Text":
             email_text = st.text_area(
                 "Email content", height=240,
                 placeholder="Paste the full email — headers, body, links...",
@@ -637,7 +790,7 @@ elif page == "scan":
                 else:
                     st.error("Could not extract text from this file.")
 
-        analyze_btn = st.button("🔍 Analyze Email", key="analyze", use_container_width=True)
+        analyze_btn = st.button("Analyze Email", key="analyze", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
         # ── Email Header Analysis card (left column, below input) ──────────
@@ -647,7 +800,7 @@ elif page == "scan":
             hdr_flags = hdr["flags"]
 
             st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-            st.markdown('<div class="pd-card-title">📨 Email Header Analysis</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="pd-card-title">{_I["mail"]} Email Header Analysis</div>', unsafe_allow_html=True)
 
             # Core fields table
             display_fields = [
@@ -706,11 +859,11 @@ elif page == "scan":
 
     with right:
         st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-        st.markdown('<div class="pd-card-title">📊 Analysis Results</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pd-card-title">{_I["scan"]} Analysis Results</div>', unsafe_allow_html=True)
 
         if analyze_btn:
             if not email_text.strip():
-                st.warning("⚠️ Please provide email content first.")
+                st.warning("Please provide email content first.")
             else:
                 with st.spinner("Analyzing…"):
                     result      = predict_email(email_text)
@@ -751,7 +904,7 @@ elif page == "scan":
                 if lime_result:
                     pos = lime_result.get("positive", [])
                     neg = lime_result.get("negative", [])
-                    st.markdown('<div class="pd-card-title" style="margin-top:12px">🔬 LIME Word Explanations</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="pd-card-title" style="margin-top:12px">{_I["chart"]} LIME Word Explanations</div>', unsafe_allow_html=True)
                     pills_html = '<div class="lime-wrap">'
                     for w in pos[:8]:
                         pills_html += f'<span class="lime-pill lime-pos">+{w}</span>'
@@ -761,14 +914,46 @@ elif page == "scan":
                     st.markdown(pills_html, unsafe_allow_html=True)
                     st.markdown(
                         '<p style="font-size:.72rem;color:#64748B;margin-top:6px">'
-                        '🟢 Green = pushes toward predicted class &nbsp;|&nbsp; 🔴 Red = pushes away</p>',
+                        'green = toward predicted class &nbsp;·&nbsp; red = away from it</p>',
                         unsafe_allow_html=True,
                     )
+
+                # Multi-signal analysis panel
+                signals = result.get("signals", [])
+                used_ensemble = result.get("used_ensemble", False)
+                if signals or used_ensemble:
+                    st.markdown(f'<div class="pd-card-title" style="margin-top:12px">{_I["signal"]} Multi-Signal Analysis</div>', unsafe_allow_html=True)
+                    net = sum(s["weight"] for s in signals)
+                    net_label = "legitimate signals dominant" if net < 0 else ("phishing signals dominant" if net > 0 else "balanced")
+                    net_color = "#0DAF80" if net < 0 else ("#D97706" if net > 0 else "#3D5470")
+                    method_label = "LR + SVM ensemble" if used_ensemble else "LR only"
+                    st.markdown(f"""
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:{T['text_muted']};margin-bottom:8px">
+                      model: {method_label} &nbsp;·&nbsp;
+                      <span style="color:{net_color}">net {net:+.2f} — {net_label}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    for sig in signals:
+                        direction = sig.get("direction", "phishing" if sig["weight"] > 0 else "legitimate")
+                        pill_cls  = "lime-neg" if direction == "phishing" else "lime-pos"
+                        icon      = "↑ phish" if direction == "phishing" else "↓ legit"
+                        st.markdown(
+                            f'<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:5px">'
+                            f'<span class="lime-pill {pill_cls}" style="white-space:nowrap">{icon}</span>'
+                            f'<span style="font-size:.78rem;color:{T["text_sub"]}">{sig["label"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    if not signals:
+                        st.markdown(
+                            '<p style="font-size:.78rem;color:#64748B">No additional signals detected in headers or URLs.</p>',
+                            unsafe_allow_html=True,
+                        )
 
                 # URL analysis
                 url_results = check_urls_in_email(email_text)
                 if url_results:
-                    st.markdown('<div class="pd-card-title" style="margin-top:12px">🔗 URLs Found</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="pd-card-title" style="margin-top:12px">{_I["link"]} URLs Found</div>', unsafe_allow_html=True)
                     for ur in url_results[:8]:
                         cls        = _url_row_cls(ur["risk"])
                         flags_str  = " · ".join(ur.get("flags", [])) or "No issues detected"
@@ -789,7 +974,7 @@ elif page == "scan":
                 if pdf_bytes:
                     st.markdown("<br>", unsafe_allow_html=True)
                     st.download_button(
-                        "📥 Download PDF Report",
+                        "Download PDF Report",
                         data=pdf_bytes,
                         file_name=f"phishdetect_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                         mime="application/pdf",
@@ -816,32 +1001,32 @@ elif page == "url":
 
     with left:
         st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-        st.markdown('<div class="pd-card-title">🔗 URL Input</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pd-card-title">{_I["link"]} URL Input</div>', unsafe_allow_html=True)
         url_input = st.text_input(
             "Enter URL", placeholder="https://example.com/path?query=value",
             label_visibility="collapsed",
         )
-        check_btn = st.button("🔍 Check URL", key="check_url", use_container_width=True)
+        check_btn = st.button("Check URL", key="check_url", use_container_width=True)
 
-        st.markdown('<div class="pd-card-title" style="margin-top:1.5rem">📋 Bulk Check (one URL per line)</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pd-card-title" style="margin-top:1.5rem">{_I["link"]} Bulk Check (one URL per line)</div>', unsafe_allow_html=True)
         bulk_input = st.text_area(
             "Bulk URLs", height=140,
             placeholder="https://url1.com\nhttps://url2.com\n…",
             label_visibility="collapsed",
         )
-        bulk_btn = st.button("🔍 Check All URLs", key="check_bulk", use_container_width=True)
+        bulk_btn = st.button("Check All URLs", key="check_bulk", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     with right:
         st.markdown('<div class="pd-card">', unsafe_allow_html=True)
-        st.markdown('<div class="pd-card-title">📊 URL Analysis</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="pd-card-title">{_I["chart"]} URL Analysis</div>', unsafe_allow_html=True)
 
         if check_btn and url_input.strip():
             ur = check_url(url_input.strip())
             cls        = _url_row_cls(ur["risk"])
             badge_cls  = _risk_css(ur["risk"])
             flags_str  = " · ".join(ur.get("flags", [])) or "No issues detected"
-            safe_label = "✅ Safe" if ur["safe"] else "⚠️ Suspicious"
+            safe_label = "Safe" if ur["safe"] else "Suspicious"
             st.markdown(f"""
             <div class="{cls}" style="border-radius:8px;padding:12px 14px">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -889,7 +1074,7 @@ elif page == "url":
         else:
             st.markdown(f"""
             <div style="text-align:center;padding:3rem 1rem;color:{T['text_muted']}">
-              <div style="font-size:2.5rem;margin-bottom:.75rem">🔗</div>
+              <div style="opacity:.35;margin-bottom:.75rem">{_I["link"]}</div>
               <div style="font-size:.9rem">Enter a URL above and click Check URL</div>
             </div>
             """, unsafe_allow_html=True)
@@ -909,7 +1094,7 @@ elif page == "dashboard":
     if not history:
         st.markdown(f"""
         <div class="pd-card" style="text-align:center;padding:3rem">
-          <div style="font-size:3rem;margin-bottom:1rem">📊</div>
+          <div style="opacity:.3;margin-bottom:1rem">{_I["chart"]}</div>
           <div style="font-size:1rem;font-weight:700;color:{T['text']}">No scans yet</div>
           <div style="font-size:.85rem;color:{T['text_muted']};margin-top:6px">
             Head to Scan Email to analyse your first email
@@ -1004,7 +1189,7 @@ elif page == "about":
     st.markdown('<div class="pd-content">', unsafe_allow_html=True)
     st.markdown(f"""
     <div class="pd-card">
-      <div class="pd-card-title">ℹ️ About PhishDetect AI</div>
+      <div class="pd-card-title">{_I["info"]} About PhishDetect AI</div>
       <p style="color:{T['text_sub']};line-height:1.8;font-size:.9rem">
         PhishDetect AI is a machine-learning-powered email threat detection tool built with
         Streamlit. It classifies emails into three categories: <strong>Legitimate</strong>,
@@ -1013,40 +1198,40 @@ elif page == "about":
     </div>
 
     <div class="pd-card">
-      <div class="pd-card-title">🏗️ Architecture</div>
+      <div class="pd-card-title">Architecture</div>
       <div class="feature-grid">
         <div class="feature-item">
-          <div class="feature-icon">📝</div>
+          <div class="feature-icon">{_I["scan"]}</div>
           <div class="feature-name">Text Preprocessing</div>
           <div class="feature-desc">HTML decoding, URL/email stripping, lowercasing, alpha-only filtering</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">📐</div>
+          <div class="feature-icon">{_I["info"]}</div>
           <div class="feature-name">TF-IDF Vectorizer</div>
           <div class="feature-desc">Fixed vocabulary trained at fit-time, always loaded from vectorizer.pkl</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">🌲</div>
-          <div class="feature-name">ML Classifier</div>
-          <div class="feature-desc">Scikit-learn model trained on labelled phishing datasets</div>
+          <div class="feature-icon">{_I["shield"]}</div>
+          <div class="feature-name">LR + SVM Ensemble</div>
+          <div class="feature-desc">Calibrated soft-vote blend of Logistic Regression and SVM classifiers</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">🔬</div>
+          <div class="feature-icon">{_I["chart"]}</div>
           <div class="feature-name">LIME Explainer</div>
           <div class="feature-desc">Local interpretable model-agnostic explanations at word level</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">📨</div>
+          <div class="feature-icon">{_I["mail"]}</div>
           <div class="feature-name">Header Analysis</div>
           <div class="feature-desc">From/Reply-To mismatch, SPF/DKIM/DMARC, hop count, Message-ID checks</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">🔗</div>
+          <div class="feature-icon">{_I["link"]}</div>
           <div class="feature-name">URL Heuristics</div>
           <div class="feature-desc">IP detection, typosquatting, shorteners, TLD abuse — no external API needed</div>
         </div>
         <div class="feature-item">
-          <div class="feature-icon">📄</div>
+          <div class="feature-icon">{_I["download"]}</div>
           <div class="feature-name">PDF Reports</div>
           <div class="feature-desc">ReportLab-generated threat reports with verdict, probabilities, and LIME results</div>
         </div>
@@ -1054,7 +1239,7 @@ elif page == "about":
     </div>
 
     <div class="pd-card">
-      <div class="pd-card-title">⚠️ Disclaimer</div>
+      <div class="pd-card-title">{_I["alert"]} Disclaimer</div>
       <p style="color:{T['text_sub']};line-height:1.8;font-size:.85rem">
         PhishDetect AI is intended for security research and awareness purposes only.
         No automated tool provides 100% accuracy — always apply human judgement for

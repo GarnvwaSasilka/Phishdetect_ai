@@ -1,0 +1,112 @@
+/* PhishDetect AI — Gmail content styles */
+
+/* ── Analyse / Re-analyse button ───────────────────────────────────────────── */
+.pd-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 6px 16px !important;
+  margin: 8px 0 4px !important;
+  background: #C05E1A !important;
+  color: #FFFFFF !important;
+  border: none !important;
+  border-radius: 20px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em !important;
+  cursor: pointer !important;
+  box-shadow: 0 1px 4px rgba(192, 94, 26, 0.35) !important;
+  transition: background 0.15s, box-shadow 0.15s !important;
+  line-height: 1.4 !important;
+  text-transform: none !important;
+}
+.pd-btn:hover   { background: #9A4910 !important; box-shadow: 0 2px 7px rgba(192,94,26,.45) !important; }
+.pd-btn:disabled { opacity: .55 !important; cursor: default !important; }
+
+/* ── Spinner ─────────────────────────────────────────────────────────────────── */
+.pd-spinner {
+  display: inline-block !important;
+  width: 10px !important; height: 10px !important;
+  border: 1.5px solid rgba(255,255,255,.45) !important;
+  border-top-color: #fff !important;
+  border-radius: 50% !important;
+  animation: pd-spin .55s linear infinite !important;
+  flex-shrink: 0 !important;
+}
+@keyframes pd-spin { to { transform: rotate(360deg); } }
+
+/* ── Verdict card ───────────────────────────────────────────────────────────── */
+.pd-verdict-badge {
+  display: block !important;
+  margin: 4px 0 10px !important;
+  padding: 10px 14px 10px 16px !important;
+  border-left: 4px solid !important;
+  border-radius: 0 6px 6px 0 !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  box-shadow: 0 1px 4px rgba(44,26,10,.08) !important;
+}
+.pd-legit { background: #f0faf5 !important; border-color: #0F7A50 !important; }
+.pd-phish { background: #fff5f3 !important; border-color: #B03010 !important; }
+.pd-ai    { background: #f8f3ff !important; border-color: #6B21A8 !important; }
+.pd-error { background: #fff5f3 !important; border-color: #B03010 !important; color: #B03010 !important; }
+
+/* ── Verdict header row ──────────────────────────────────────────────────────── */
+.pd-header-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  margin-bottom: 4px !important;
+}
+.pd-brand-tag {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+  color: #9E8068 !important;
+  border: 1px solid #E8D8C4 !important;
+  padding: 1px 5px !important;
+  border-radius: 3px !important;
+  background: #FAF7F2 !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+
+.pd-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  flex-wrap: wrap !important;
+}
+.pd-label { font-weight: 700 !important; font-size: 13px !important; }
+.pd-legit .pd-label { color: #0F7A50 !important; }
+.pd-phish .pd-label { color: #B03010 !important; }
+.pd-ai    .pd-label { color: #6B21A8 !important; }
+
+.pd-conf {
+  font-family: 'Courier New', monospace !important;
+  font-size: 11px !important; color: #9E8068 !important;
+}
+.pd-risk {
+  font-family: 'Courier New', monospace !important;
+  font-size: 9px !important; text-transform: uppercase !important;
+  letter-spacing: .05em !important; color: #9E8068 !important;
+  border: 1px solid #E8D8C4 !important; padding: 1px 6px !important;
+  border-radius: 3px !important; background: #FAF7F2 !important;
+}
+
+/* ── Signal pills ────────────────────────────────────────────────────────────── */
+.pd-sigs {
+  margin-top: 6px !important;
+  display: flex !important; flex-wrap: wrap !important; gap: 4px !important;
+}
+.pd-sig {
+  font-size: 10px !important; padding: 2px 8px !important;
+  border-radius: 3px !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+}
+.pd-sig-warn { background: rgba(176,48,16,.1) !important; color: #B03010 !important; }
+.pd-sig-ok   { background: rgba(15,122,80,.1) !important; color: #0F7A50 !important; }

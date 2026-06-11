@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PhishDetect AI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 290px;
+      background: #FAF7F2;
+      color: #2C1A0A;
+      font-family: -apple-system, 'Inter', system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid #E8D8C4;
+      background: #FFFFFF;
+    }
+    .logo-wrap img {
+      height: 30px; width: auto; display: block;
+    }
+    .version {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      color: #9E8068;
+      border: 1px solid #E8D8C4;
+      padding: 2px 5px;
+      border-radius: 3px;
+    }
+
+    /* Status */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 16px;
+      border-bottom: 1px solid #F5EDE0;
+      font-size: 11px;
+      color: #9E8068;
+      background: #FAF7F2;
+    }
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #E8D8C4;
+      flex-shrink: 0;
+    }
+    .dot.ok   { background: #0F7A50; box-shadow: 0 0 4px rgba(15,122,80,0.4); }
+    .dot.fail { background: #B03010; }
+
+    /* Body */
+    .body { padding: 14px 16px; background: #FAF7F2; }
+
+    label {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #9E8068;
+      margin-bottom: 5px;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 7px 10px;
+      background: #FFFFFF;
+      border: 1px solid #E8D8C4;
+      border-radius: 4px;
+      color: #2C1A0A;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus { border-color: #C05E1A; }
+
+    .save-btn {
+      width: 100%;
+      margin-top: 8px;
+      padding: 7px;
+      background: #FFFFFF;
+      border: 1px solid #E8D8C4;
+      border-radius: 4px;
+      color: #6B4A32;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .save-btn:hover { border-color: #C05E1A; color: #C05E1A; }
+
+    .saved-msg {
+      font-size: 10px;
+      color: #0F7A50;
+      margin-top: 5px;
+      height: 14px;
+    }
+
+    .divider { border: none; border-top: 1px solid #F0E4D4; margin: 14px 0; }
+
+    .dashboard-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 8px;
+      background: #C05E1A;
+      border: none;
+      border-radius: 4px;
+      color: #FFFFFF;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .dashboard-btn:hover { background: #9A4910; }
+
+    .feed-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      margin-top: 6px;
+      padding: 8px;
+      background: transparent;
+      border: 1px solid #E8D8C4;
+      border-radius: 4px;
+      color: #6B4A32;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      transition: border-color .15s, color .15s;
+    }
+    .feed-btn:hover { border-color: #C05E1A; color: #C05E1A; }
+
+    .hint {
+      margin-top: 12px;
+      font-size: 10px;
+      color: #9E8068;
+      line-height: 1.6;
+      padding: 8px 10px;
+      background: #F5EDE0;
+      border-radius: 4px;
+      border: 1px solid #E8D8C4;
+    }
+    .hint strong { color: #6B4A32; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-wrap">
+      <img src="logo.png" alt="PhishDetect AI">
+    </div>
+    <span class="version">v2.0</span>
+  </div>
+
+  <div class="status-row">
+    <div class="dot" id="statusDot"></div>
+    <span id="statusText">Checking API…</span>
+  </div>
+
+  <div class="body">
+    <label>API Endpoint</label>
+    <input type="text" id="apiUrl" placeholder="http://localhost:8000">
+    <button class="save-btn" id="saveBtn">Save Settings</button>
+    <div class="saved-msg" id="savedMsg"></div>
+
+    <hr class="divider">
+
+    <a class="dashboard-btn" id="dashboardBtn" href="#" target="_blank">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      Open Dashboard
+    </a>
+    <a class="feed-btn" id="feedBtn" href="#" target="_blank">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="2"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+      </svg>
+      Live Scan Feed
+    </a>
+
+    <p class="hint">
+      Adds an <strong>Analyse</strong> button to every Gmail email.<br>
+      Verdict appears inline — no copy-paste needed.
+    </p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

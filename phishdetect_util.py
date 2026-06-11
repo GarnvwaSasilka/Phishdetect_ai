@@ -8,6 +8,7 @@ import re
 import html
 import io
 import os
+import json
 import urllib.parse
 import urllib.request
 import socket
@@ -65,10 +66,10 @@ except Exception:
 
 # ── Color map ──────────────────────────────────────────────────────────────────
 COLOR_MAP = {
-    "legitimate":            "#34D399",
-    "traditional phishing":  "#60A5FA",
-    "ai generated phishing": "#FCD34D",
-    "unknown":               "#94A3B8",
+    "legitimate":            "#0DAF80",  # teal-green — unambiguous safe
+    "traditional phishing":  "#D97706",  # amber — alarm, not "calm blue"
+    "ai generated phishing": "#8B5CF6",  # violet — novel threat class
+    "unknown":               "#3A5270",
 }
 
 # ── Suspicious domain patterns ─────────────────────────────────────────────────
@@ -86,16 +87,64 @@ SUSPICIOUS_TLD = {".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".click", "
 # ── Label map ──────────────────────────────────────────────────────────────────
 _LABEL_MAP = {0: "legitimate", 1: "traditional phishing", 2: "ai generated phishing"}
 
+# ── Brand list — loaded from brands.json ──────────────────────────────────────
+# What this is:  a brand-impersonation detector, not a whitelist.
+# For each brand keyword (lowercase), it lists the ONLY domains that are legitimate
+# senders for that brand. If an email mentions "paypal" but comes from a different
+# domain, that is a mismatch signal. If it comes from paypal.com, it is a trust signal.
+# Edit brands.json to add or remove entries — do not hardcode here.
+def _load_brand_domains() -> dict[str, list[str]]:
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brands.json")
+    if not os.path.isfile(path):
+        print("[PhishDetect] WARNING: brands.json not found — brand signals disabled.")
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        # brands.json is grouped by category; flatten into a single brand→domains dict
+        flat: dict[str, list[str]] = {}
+        for section in raw.values():
+            if isinstance(section, dict):
+                for brand, domains in section.items():
+                    flat[brand.lower()] = [d.lower() for d in domains]
+        return flat
+    except Exception as e:
+        print(f"[PhishDetect] ERROR loading brands.json: {e}")
+        return {}
+
+_KNOWN_BRAND_DOMAINS: dict[str, list[str]] = _load_brand_domains()
+
+# Flat set of ALL trusted domains — used to decide if a sender is itself a known brand
+# (in which case we suppress mismatch signals for other brands it happens to link to)
+_ALL_TRUSTED_DOMAINS: set[str] = {
+    d for domains in _KNOWN_BRAND_DOMAINS.values() for d in domains
+}
+
+# Well-known safe domains — URL checker returns Low risk immediately for these
+_SAFE_URL_DOMAINS: set[str] = {
+    "github.com", "gitlab.com", "stackoverflow.com", "wikipedia.org",
+    "google.com", "gmail.com", "youtube.com", "slack.com", "notion.so",
+    "microsoft.com", "office.com", "outlook.com", "live.com",
+    "apple.com", "icloud.com", "amazon.com", "aws.amazon.com",
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com",
+    "zoom.us", "atlassian.com", "jira.atlassian.com", "trello.com",
+    "dropbox.com", "figma.com", "vercel.com", "netlify.com",
+    "stripe.com", "paypal.com", "paystack.com", "flutterwave.com",
+    "gtbank.com", "zenithbank.com", "accessbankplc.com", "ubagroup.com",
+    "kuda.com", "moniepoint.com", "piggyvest.com",
+}
+
 # ── Model state ───────────────────────────────────────────────────────────────
 _MODEL      = None
 _VECTORIZER = None
+_SVM_MODEL  = None
 _ARTIFACTS_LOADED = False
 _LIME_EXPLAINER   = None
 
 
 # ── Artifact loading ───────────────────────────────────────────────────────────
 def _load_artifacts():
-    global _MODEL, _VECTORIZER, _ARTIFACTS_LOADED
+    global _MODEL, _VECTORIZER, _SVM_MODEL, _ARTIFACTS_LOADED
     if _ARTIFACTS_LOADED:
         return
     _ARTIFACTS_LOADED = True
@@ -108,12 +157,13 @@ def _load_artifacts():
         return None
     model_path      = _find("model.pkl")
     vectorizer_path = _find("vectorizer.pkl")
+    svm_path        = _find("svm_final.pkl")
     if model_path is None:
         print("[PhishDetect] WARNING: model.pkl not found in search path.")
     else:
         try:
             _MODEL = joblib.load(model_path)
-            print(f"[PhishDetect] Loaded model from {model_path}  "
+            print(f"[PhishDetect] Loaded LR model from {model_path}  "
                   f"(expects {_MODEL.n_features_in_} features)")
         except Exception as e:
             print(f"[PhishDetect] ERROR loading model.pkl: {e}")
@@ -138,18 +188,34 @@ def _load_artifacts():
             )
             _MODEL      = None
             _VECTORIZER = None
+    if svm_path is None:
+        print("[PhishDetect] INFO: svm_final.pkl not found — using LR only.")
+    else:
+        try:
+            _SVM_MODEL = joblib.load(svm_path)
+            svm_feat = getattr(_SVM_MODEL, "n_features_in_", None)
+            model_feat = getattr(_MODEL, "n_features_in_", None)
+            if svm_feat and model_feat and svm_feat != model_feat:
+                print(f"[PhishDetect] WARNING: SVM feature count ({svm_feat}) != "
+                      f"LR feature count ({model_feat}). Disabling SVM.")
+                _SVM_MODEL = None
+            else:
+                print(f"[PhishDetect] Loaded SVM from {svm_path} — ensemble active.")
+        except Exception as e:
+            print(f"[PhishDetect] ERROR loading svm_final.pkl: {e}")
 
 
 # ── Text cleaning ──────────────────────────────────────────────────────────────
 def clean_text(text: str) -> str:
     if not isinstance(text, str):
         text = str(text)
-    text = text.lower()
     text = html.unescape(text)
     text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"https?://\S+|www\.\S+", " ", text)
-    text = re.sub(r"\S+@\S+\.\S+", " ", text)
-    text = re.sub(r"[^a-z\s]", " ", text)
+    text = text.lower()
+    text = re.sub(r"https?://\S+|www\.\S+", " url_link ", text)
+    text = re.sub(r"\S+@\S+\.\S+", " email_addr ", text)
+    text = re.sub(r"\b\d[\d,.]*\b", " number ", text)
+    text = re.sub(r"[^a-z\s_]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -177,6 +243,146 @@ def extract_text_from_file(uploaded_file) -> str:
     return ""
 
 
+# ── Multi-signal helpers ───────────────────────────────────────────────────────
+def _sender_domain(email_text: str) -> str | None:
+    """Extract the domain portion of the From: header."""
+    m = re.search(r"^From:[^\n]*@([\w.\-]+)", email_text, re.IGNORECASE | re.MULTILINE)
+    return m.group(1).lower() if m else None
+
+
+def _compute_multi_signals(email_text: str) -> list[dict]:
+    """
+    Return a list of dicts: {weight, label, direction}
+    weight > 0  → phishing evidence
+    weight < 0  → legitimate evidence
+    Signals cover sender-brand alignment, auth failures, URL risk, and template artefacts.
+    """
+    signals: list[dict] = []
+    body_lower = email_text.lower()
+
+    # ── Signal 1: Unfilled template variables ─────────────────────────────────
+    # Bulk-mail blasts that forgot to render variables are a clear phishing marker.
+    # Weight raised to 0.40 because clean_text() strips both URLs and special chars,
+    # meaning the classifier never sees template artefacts — only this signal catches them.
+    if re.search(
+        r"\{\{[A-Za-z_]+\}\}|\{[A-Za-z_]+\}|\[(?:F?NAME|LAST_?NAME|EMAIL|RECIPIENT|FIRST)\]|%[A-Z_]+%",
+        email_text,
+    ):
+        signals.append({
+            "weight": 0.40,
+            "label":  "Unfilled template variable found (unrendered bulk mail)",
+            "direction": "phishing",
+        })
+    # Template variable embedded directly inside a URL is even stronger evidence
+    # (the URL itself was never rendered — this is almost never in a legitimate email).
+    if re.search(r"https?://[^\s]*\{\{[A-Za-z_]+\}\}", email_text):
+        signals.append({
+            "weight": 0.25,
+            "label":  "URL contains an unfilled template slot (e.g. ?email={{FEmail}})",
+            "direction": "phishing",
+        })
+
+    # ── Signal 2: Sender-brand alignment ──────────────────────────────────────
+    # Only scan the *display text* for brand mentions — strip URLs first so that
+    # a Slack notification linking to github.com doesn't get flagged as
+    # "claims to be GitHub". Also: if the sender is itself a known trusted brand,
+    # suppress all mismatch signals (a verified Slack email can link to anything).
+    from_domain = _sender_domain(email_text)
+    if from_domain:
+        display_text = re.sub(r"https?://\S+", " ", body_lower)  # remove URLs
+        for brand, trusted in _KNOWN_BRAND_DOMAINS.items():
+            if brand in display_text:
+                is_trusted = any(
+                    from_domain == td or from_domain.endswith("." + td)
+                    for td in trusted
+                )
+                if is_trusted:
+                    # Known sender matches known brand → strong legitimacy signal
+                    signals.append({
+                        "weight": -0.70,
+                        "label":  f"Sender domain '{from_domain}' matches trusted brand '{brand}'",
+                        "direction": "legitimate",
+                    })
+                    break
+                # If sender is NOT recognised: we simply don't know — emit no signal.
+                # "Not on our list" is not evidence of phishing; it just means we lack data.
+                # Firing a phishing signal here would penalise every small/regional business
+                # that will never appear in brands.json.
+
+    # ── Signal 3: URL risk ────────────────────────────────────────────────────
+    # Weights are deliberately conservative — URL heuristics are noisy and will
+    # catch legitimate business domains with hyphens, subdomains, or action-words
+    # in their paths. Only truly egregious URLs (IP addresses, malicious TLDs,
+    # executable downloads) should materially shift the verdict.
+    url_results = check_urls_in_email(email_text)
+    if url_results:
+        risk_weight = {"Low": 0, "Medium": 0.05, "High": 0.10, "Critical": 0.20}
+        max_risk    = max(url_results, key=lambda ur: risk_weight.get(ur["risk"], 0))["risk"]
+        w = risk_weight.get(max_risk, 0)
+        if w > 0:
+            signals.append({
+                "weight": w,
+                "label":  f"Highest URL risk in email: {max_risk}",
+                "direction": "phishing",
+            })
+
+    # ── Signal 4: Email authentication failures ───────────────────────────────
+    auth = re.search(r"^Authentication-Results:\s*(.+)", email_text,
+                     re.IGNORECASE | re.MULTILINE)
+    auth_str = auth.group(1).lower() if auth else ""
+    if "spf=fail"   in auth_str:
+        signals.append({"weight": 0.20, "label": "SPF check failed",  "direction": "phishing"})
+    if "dkim=fail"  in auth_str:
+        signals.append({"weight": 0.20, "label": "DKIM signature failed", "direction": "phishing"})
+    if "dmarc=fail" in auth_str:
+        signals.append({"weight": 0.20, "label": "DMARC policy failed", "direction": "phishing"})
+
+    # ── Signal 5: Reply-To / From domain mismatch ─────────────────────────────
+    from_hdr     = re.search(r"^From:\s*(.+)",     email_text, re.I | re.M)
+    reply_to_hdr = re.search(r"^Reply-To:\s*(.+)", email_text, re.I | re.M)
+    def _dom(addr: str) -> str:
+        m = re.search(r"@([\w.\-]+)", addr)
+        return m.group(1).lower() if m else ""
+    if from_hdr and reply_to_hdr:
+        fd = _dom(from_hdr.group(1))
+        rd = _dom(reply_to_hdr.group(1))
+        if fd and rd and fd != rd:
+            signals.append({
+                "weight": 0.30,
+                "label":  f"From/Reply-To domain mismatch ({fd} vs {rd})",
+                "direction": "phishing",
+            })
+
+    return signals
+
+
+def _apply_signals(ensemble_proba: np.ndarray, signals: list[dict]) -> np.ndarray:
+    """
+    Interpolate ensemble_proba toward an oracle distribution using the net
+    signal weight. Positive net → blend toward phishing oracle [0,1,0].
+    Negative net → blend toward legitimate oracle [1,0,0].
+    Caps at 80% blend so the text model always contributes at least 20%.
+    """
+    if not signals:
+        return ensemble_proba
+
+    net = sum(s["weight"] for s in signals)
+    if net == 0:
+        return ensemble_proba
+
+    if net > 0:
+        oracle = np.array([0.0, 1.0, 0.0])
+        blend  = min(net, 0.75)
+    else:
+        oracle = np.array([1.0, 0.0, 0.0])
+        blend  = min(abs(net), 0.80)
+
+    adjusted = (1.0 - blend) * ensemble_proba + blend * oracle
+    adjusted = np.clip(adjusted, 0, 1)
+    total    = adjusted.sum()
+    return adjusted / total if total > 0 else adjusted
+
+
 # ── Prediction ─────────────────────────────────────────────────────────────────
 def predict_email(email_text: str) -> dict:
     _load_artifacts()
@@ -189,32 +395,59 @@ def predict_email(email_text: str) -> dict:
             "traditional phishing":  0.0,
             "ai generated phishing": 0.0,
         },
+        "signals":      [],
+        "used_ensemble": False,
     }
     if _MODEL is None or _VECTORIZER is None:
         return _empty
     cleaned = clean_text(email_text)
     try:
         X = _VECTORIZER.transform([cleaned])
-        raw_pred   = _MODEL.predict(X)[0]
-        pred_label = _LABEL_MAP.get(int(raw_pred), str(raw_pred).lower())
-        proba    = _MODEL.predict_proba(X)[0]
-        classes  = _MODEL.classes_
-        prob_dict = {
+
+        # LR+SVM soft-vote ensemble (50/50) when SVM is available
+        lr_proba = _MODEL.predict_proba(X)[0]
+        if _SVM_MODEL is not None:
+            svm_proba      = _SVM_MODEL.predict_proba(X)[0]
+            ensemble_proba = (lr_proba * 0.5) + (svm_proba * 0.5)
+            used_ensemble  = True
+        else:
+            ensemble_proba = lr_proba
+            used_ensemble  = False
+
+        # Multi-signal fusion: sender-brand, URL risk, auth failures, templates
+        signals        = _compute_multi_signals(email_text)
+        adjusted_proba = _apply_signals(ensemble_proba, signals)
+
+        pred_idx   = int(np.argmax(adjusted_proba))
+        pred_label = _LABEL_MAP.get(pred_idx, "unknown")
+        classes    = _MODEL.classes_
+        prob_dict  = {
             _LABEL_MAP.get(int(c), str(c).lower()): float(p)
-            for c, p in zip(classes, proba)
+            for c, p in zip(classes, adjusted_proba)
         }
-        confidence = float(np.max(proba)) * 100
+        confidence = float(np.max(adjusted_proba)) * 100
+
+        # Risk level must be supported by evidence, not just ML confidence alone.
+        # A borderline phishing call (50–79%) with no corroborating signals is
+        # "Medium" — still a warning, but not "High" which implies strong confidence.
+        net_phish_signals = sum(s["weight"] for s in signals if s["weight"] > 0)
         if "ai" in pred_label or "generated" in pred_label:
             risk = "Critical"
         elif "phishing" in pred_label:
-            risk = "High"
+            if confidence >= 80 or net_phish_signals >= 0.25:
+                risk = "High"
+            else:
+                risk = "Medium"   # ML suspects phishing but no hard evidence to back it
         else:
             risk = "Low" if confidence >= 70 else "Medium"
+
         return {
             "prediction":    pred_label,
             "confidence":    confidence,
             "risk_level":    risk,
             "probabilities": prob_dict,
+            "signals":       signals,
+            "used_ensemble": used_ensemble,
         }
     except Exception as e:
         print(f"[PhishDetect] predict_email error: {e}")
@@ -270,9 +503,13 @@ def check_url(url: str) -> dict:
     risk  = "Low"
     try:
         parsed = urllib.parse.urlparse(url)
-        domain = parsed.netloc.lower()
+        domain = parsed.netloc.lower().lstrip("www.")
         path   = parsed.path.lower()
         full   = url.lower()
+
+        # Fast-exit for well-known legitimate domains — no heuristics needed
+        if any(domain == sd or domain.endswith("." + sd) for sd in _SAFE_URL_DOMAINS):
+            return {"url": url, "risk": "Low", "flags": [], "safe": True}
         if re.search(r"^\d{1,3}(\.\d{1,3}){3}(:\d+)?$", domain):
             flags.append("Uses raw IP address instead of domain")
             risk = "Critical"
